@@ -80,6 +80,7 @@ impl Parser {
             TokenKind::Const => self.const_declaration(),
             TokenKind::Fun => self.fun_declaration(),
             TokenKind::Mod => self.mod_declaration(),
+            TokenKind::Class => self.class_declaration(),
             _ => self.statement(),
         }
     }
@@ -140,6 +141,44 @@ impl Parser {
         self.expect_kind(&TokenKind::RBrace, "expected '}' after module body")?;
 
         Ok(Stmt::ModDecl { name, body, span })
+    }
+
+    /// Parses `class Name { methods... }`
+    ///
+    /// Each method is `name(params) { body }`. If the first parameter is
+    /// `self`, it is silently stripped — `self` is always available
+    /// implicitly at slot 0 inside every method.
+    fn class_declaration(&mut self) -> CirqResult<Stmt> {
+        let span = self.advance().span; // consume 'class'
+        let name = self.expect_ident("expected class name")?;
+        self.expect_kind(&TokenKind::LBrace, "expected '{' after class name")?;
+
+        let mut methods = Vec::new();
+        while !self.check_kind(&TokenKind::RBrace) && !self.is_at_end() {
+            let method_span = self.peek().span;
+            let method_name = self.expect_ident("expected method name")?;
+            let mut params = self.parse_param_list()?;
+
+            // Strip `self` if it appears as the first parameter (decorative).
+            if params.first().map(|s| s.as_str()) == Some("self") {
+                params.remove(0);
+            }
+
+            let body = self.parse_block_body()?;
+            methods.push(MethodDecl {
+                name: method_name,
+                params,
+                body,
+                span: method_span,
+            });
+        }
+
+        self.expect_kind(&TokenKind::RBrace, "expected '}' after class body")?;
+        Ok(Stmt::ClassDecl {
+            name,
+            methods,
+            span,
+        })
     }
 
     // -------------------------------------------------------------------------
@@ -441,6 +480,12 @@ impl Parser {
             // String interpolation
             TokenKind::StringStart(_) => self.parse_string_interpolation(),
 
+            // Self reference inside a method
+            TokenKind::SelfKw => {
+                let t = self.advance();
+                Ok(Expr::SelfRef { span: t.span })
+            }
+
             _ => Err(CirqError::parser(
                 format!("unexpected token: {:?}", token.kind),
                 token.span,
@@ -702,14 +747,37 @@ impl Parser {
         let mut params = Vec::new();
 
         if !self.check_kind(&TokenKind::RParen) {
-            params.push(self.expect_ident("expected parameter name")?);
+            params.push(self.expect_param_name()?);
             while self.match_kind(&TokenKind::Comma) {
-                params.push(self.expect_ident("expected parameter name")?);
+                params.push(self.expect_param_name()?);
             }
         }
 
         self.expect_kind(&TokenKind::RParen, "expected ')' after parameters")?;
         Ok(params)
+    }
+
+    /// Expects a parameter name — either an identifier or `self`.
+    ///
+    /// `self` is lexed as `SelfKw`, not `Ident`, so the standard
+    /// `expect_ident` rejects it. This helper accepts both.
+    fn expect_param_name(&mut self) -> CirqResult<String> {
+        let token = self.peek().clone();
+        match &token.kind {
+            TokenKind::Ident(_) => {
+                let t = self.advance();
+                if let TokenKind::Ident(name) = t.kind {
+                    Ok(name)
+                } else {
+                    unreachable!()
+                }
+            }
+            TokenKind::SelfKw => {
+                self.advance();
+                Ok("self".to_string())
+            }
+            _ => Err(CirqError::parser("expected parameter name", token.span)),
+        }
     }
 
     /// Parses a call argument list: `(arg1, arg2, ...)`
@@ -918,7 +986,8 @@ impl Expr {
             | Expr::MemberAccess { span, .. }
             | Expr::Array { span, .. }
             | Expr::PreIncDec { span, .. }
-            | Expr::PostIncDec { span, .. } => *span,
+            | Expr::PostIncDec { span, .. }
+            | Expr::SelfRef { span } => *span,
         }
     }
 }

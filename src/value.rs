@@ -10,9 +10,11 @@
 //! - `Str` uses `Rc<String>` for shared ownership with cheap cloning.
 //! - `Array` uses `Rc<RefCell<Vec<Value>>>` for mutable shared arrays.
 //! - `Fun` and `Module` are reference-counted pointers to compiled data.
+//! - `Class`, `Instance`, `BoundMethod` form the unified OOP system.
 
 use crate::opcode::CompiledFunction;
 
+use rustc_hash::FxHashMap;
 use std::cell::RefCell;
 use std::fmt;
 use std::rc::Rc;
@@ -51,6 +53,38 @@ impl Module {
 }
 
 // -----------------------------------------------------------------------------
+// CLASS
+// -----------------------------------------------------------------------------
+
+/// A class definition, holding its name and compiled methods.
+///
+/// Methods are stored in a `FxHashMap` for O(1) lookup by name.
+/// The `init` method (if present) is called automatically on construction.
+#[derive(Debug, Clone)]
+pub struct Class {
+    /// Class name for display and error messages.
+    pub name: String,
+    /// Compiled methods keyed by name.
+    pub methods: FxHashMap<String, Rc<CompiledFunction>>,
+}
+
+// -----------------------------------------------------------------------------
+// INSTANCE
+// -----------------------------------------------------------------------------
+
+/// A runtime instance of a class.
+///
+/// Holds a reference to its class (for method lookup) and a mutable
+/// field map for per-instance state.
+#[derive(Debug, Clone)]
+pub struct Instance {
+    /// The class this instance was created from.
+    pub class: Rc<Class>,
+    /// Instance fields, set via `self.field = value` in methods.
+    pub fields: FxHashMap<String, Value>,
+}
+
+// -----------------------------------------------------------------------------
 // VALUE — Core Runtime Type
 // -----------------------------------------------------------------------------
 
@@ -85,6 +119,21 @@ pub enum Value {
     },
     /// Reference-counted module.
     Module(Rc<Module>),
+    /// Reference-counted class definition.
+    Class(Rc<Class>),
+    /// Reference-counted, mutable class instance.
+    Instance(Rc<RefCell<Instance>>),
+    /// A method bound to a receiver, for unified dispatch.
+    ///
+    /// Works for both user-defined class methods and builtin type methods.
+    /// When called, the receiver is passed as the first argument (slot 0
+    /// for `Fun`, prepended to args for `NativeFun`).
+    BoundMethod {
+        /// The object the method is bound to (instance, array, string, etc.).
+        receiver: Box<Value>,
+        /// The method to call (`Fun` or `NativeFun`).
+        method: Box<Value>,
+    },
 }
 
 impl Value {
@@ -95,7 +144,7 @@ impl Value {
     /// - `Bool(b)` → b
     /// - `Num(0.0)` → false, all others → true
     /// - `Str("")` → false, non-empty → true
-    /// - Arrays, functions, modules → always true
+    /// - Arrays, functions, modules, classes, instances → always true
     #[inline]
     pub fn is_truthy(&self) -> bool {
         match self {
@@ -119,6 +168,9 @@ impl Value {
             Value::Fun(_) => "fun",
             Value::NativeFun { .. } => "builtin",
             Value::Module(_) => "module",
+            Value::Class(_) => "class",
+            Value::Instance(_) => "instance",
+            Value::BoundMethod { .. } => "bound_method",
         }
     }
 
@@ -149,6 +201,11 @@ impl Value {
             Value::Fun(f) => format!("<fun {}>", f.name),
             Value::NativeFun { name, .. } => format!("<builtin {}>", name),
             Value::Module(m) => format!("<mod {}>", m.name),
+            Value::Class(c) => format!("<class {}>", c.name),
+            Value::Instance(inst) => {
+                format!("<{} instance>", inst.borrow().class.name)
+            }
+            Value::BoundMethod { .. } => "<bound method>".to_string(),
         }
     }
 }

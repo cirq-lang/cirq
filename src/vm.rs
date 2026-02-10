@@ -12,7 +12,7 @@
 
 use crate::error::{CirqError, CirqResult};
 use crate::opcode::{CompiledFunction, Instruction};
-use crate::value::{Module, Value};
+use crate::value::{Instance, Module, Value};
 
 use rustc_hash::FxHashMap;
 use std::cell::RefCell;
@@ -46,6 +46,9 @@ pub struct Vm {
     registers: Vec<Value>,
     /// Call stack.
     frames: Vec<CallFrame>,
+    /// Builtin method table: `type_name → (method_name → NativeFun value)`.
+    /// Enables unified dispatch for arrays, strings, and other builtin types.
+    type_methods: FxHashMap<&'static str, FxHashMap<&'static str, Value>>,
 }
 
 impl Vm {
@@ -55,13 +58,37 @@ impl Vm {
             globals: FxHashMap::default(),
             registers: Vec::with_capacity(256),
             frames: Vec::with_capacity(64),
+            type_methods: FxHashMap::default(),
         }
+    }
+
+    /// Registers a builtin method for a given type name.
+    ///
+    /// This enables unified method dispatch: `arr.len()`, `str.len()`,
+    /// etc. go through the same `GetMember` → `BoundMethod` → `Call`
+    /// path as user-defined class methods.
+    #[allow(dead_code)]
+    pub fn register_type_method(
+        &mut self,
+        type_name: &'static str,
+        method_name: &'static str,
+        method_value: Value,
+    ) {
+        self.type_methods
+            .entry(type_name)
+            .or_default()
+            .insert(method_name, method_value);
     }
 
     /// Registers a module as a global variable.
     pub fn register_module(&mut self, name: &str, module: Module) {
         self.globals
             .insert(name.to_string(), Value::Module(Rc::new(module)));
+    }
+
+    /// Returns the value of a global variable, if it exists.
+    pub fn get_global(&self, name: &str) -> Option<Value> {
+        self.globals.get(name).cloned()
     }
 
     /// Executes a compiled top-level function (the main script).
@@ -378,6 +405,107 @@ impl Vm {
                             })?;
                             self.registers[base + dst as usize] = result;
                         }
+                        Value::Class(class) => {
+                            // Create a new instance with empty fields.
+                            let instance = Rc::new(RefCell::new(Instance {
+                                class: class.clone(),
+                                fields: FxHashMap::default(),
+                            }));
+                            let instance_val = Value::Instance(instance.clone());
+
+                            // If the class has an `init` method, call it.
+                            if let Some(init_method) = class.methods.get("init") {
+                                if arg_count != init_method.param_count {
+                                    return Err(self.runtime_error(format!(
+                                        "'{}' init expects {} arguments, got {}",
+                                        class.name, init_method.param_count, arg_count
+                                    )));
+                                }
+
+                                let new_base = self.registers.len();
+                                let frame_size = init_method.local_count as usize + 16;
+                                self.registers.resize(new_base + frame_size, Value::Null);
+
+                                // Slot 0 = self (the new instance).
+                                self.registers[new_base] = instance_val.clone();
+                                // Remaining slots = user arguments.
+                                for i in 0..arg_count {
+                                    self.registers[new_base + 1 + i as usize] = self.registers
+                                        [base + arg_start as usize + i as usize]
+                                        .clone();
+                                }
+
+                                self.frames.push(CallFrame {
+                                    function: init_method.clone(),
+                                    ip: 0,
+                                    base: new_base,
+                                });
+                            }
+
+                            // The instance is always the result of calling a class.
+                            self.registers[base + dst as usize] = instance_val;
+                        }
+                        Value::BoundMethod { receiver, method } => {
+                            match *method {
+                                Value::Fun(ref func) => {
+                                    if arg_count != func.param_count {
+                                        return Err(self.runtime_error(format!(
+                                            "method '{}' expects {} arguments, got {}",
+                                            func.name, func.param_count, arg_count
+                                        )));
+                                    }
+
+                                    let new_base = self.registers.len();
+                                    let frame_size = func.local_count as usize + 16;
+                                    self.registers.resize(new_base + frame_size, Value::Null);
+
+                                    // Slot 0 = receiver (self).
+                                    self.registers[new_base] = *receiver;
+                                    // Remaining slots = user arguments.
+                                    for i in 0..arg_count {
+                                        self.registers[new_base + 1 + i as usize] = self.registers
+                                            [base + arg_start as usize + i as usize]
+                                            .clone();
+                                    }
+
+                                    self.frames.push(CallFrame {
+                                        function: func.clone(),
+                                        ip: 0,
+                                        base: new_base,
+                                    });
+                                }
+                                Value::NativeFun {
+                                    name, arity, func, ..
+                                } => {
+                                    // For native methods, prepend receiver to args.
+                                    if arg_count != arity {
+                                        return Err(self.runtime_error(format!(
+                                            "builtin '{}' expects {} arguments, got {}",
+                                            name, arity, arg_count
+                                        )));
+                                    }
+
+                                    let mut args = Vec::with_capacity(1 + arg_count as usize);
+                                    args.push(*receiver);
+                                    for i in 0..arg_count {
+                                        args.push(
+                                            self.registers[base + arg_start as usize + i as usize]
+                                                .clone(),
+                                        );
+                                    }
+
+                                    let result = func(&args).map_err(|e| {
+                                        CirqError::runtime_no_span(format!("{}: {}", name, e))
+                                    })?;
+                                    self.registers[base + dst as usize] = result;
+                                }
+                                _ => {
+                                    return Err(self.runtime_error(
+                                        "bound method contains non-callable value".to_string(),
+                                    ));
+                                }
+                            }
+                        }
                         other => {
                             return Err(self.runtime_error(format!(
                                 "cannot call value of type '{}'",
@@ -490,13 +618,32 @@ impl Vm {
                     }
                 }
 
-                // -- Modules --
+                // -- Members (modules, instances, type methods) --
                 Instruction::GetMember { dst, obj, name_idx } => {
                     let base = self.frames.last().unwrap().base;
-                    let module_val = self.registers[base + obj as usize].clone();
+                    let obj_val = self.registers[base + obj as usize].clone();
                     let name = &self.frames.last().unwrap().function.names[name_idx as usize];
 
-                    match &module_val {
+                    match &obj_val {
+                        Value::Instance(inst) => {
+                            let inst_ref = inst.borrow();
+                            // 1) Check instance fields.
+                            if let Some(val) = inst_ref.fields.get(name) {
+                                self.registers[base + dst as usize] = val.clone();
+                            }
+                            // 2) Check class methods → return BoundMethod.
+                            else if let Some(method) = inst_ref.class.methods.get(name) {
+                                self.registers[base + dst as usize] = Value::BoundMethod {
+                                    receiver: Box::new(obj_val.clone()),
+                                    method: Box::new(Value::Fun(method.clone())),
+                                };
+                            } else {
+                                return Err(self.runtime_error(format!(
+                                    "'{}' instance has no field or method '{}'",
+                                    inst_ref.class.name, name
+                                )));
+                            }
+                        }
                         Value::Module(m) => match m.get_member(name) {
                             Some(val) => {
                                 self.registers[base + dst as usize] = val;
@@ -508,11 +655,49 @@ impl Vm {
                                 )));
                             }
                         },
+                        // 3) Check unified type_methods table for builtins.
+                        other => {
+                            let type_name = other.type_name();
+                            if let Some(methods) = self.type_methods.get(type_name) {
+                                if let Some(method_val) = methods.get(name.as_str()) {
+                                    self.registers[base + dst as usize] = Value::BoundMethod {
+                                        receiver: Box::new(obj_val.clone()),
+                                        method: Box::new(method_val.clone()),
+                                    };
+                                } else {
+                                    return Err(self.runtime_error(format!(
+                                        "type '{}' has no method '{}'",
+                                        type_name, name
+                                    )));
+                                }
+                            } else {
+                                return Err(self.runtime_error(format!(
+                                    "cannot access member '{}' on {}",
+                                    name,
+                                    obj_val.type_name()
+                                )));
+                            }
+                        }
+                    }
+                }
+
+                // -- Set Member (instance field assignment) --
+                Instruction::SetMember { obj, name_idx, val } => {
+                    let base = self.frames.last().unwrap().base;
+                    let obj_val = self.registers[base + obj as usize].clone();
+                    let name =
+                        self.frames.last().unwrap().function.names[name_idx as usize].clone();
+                    let value = self.registers[base + val as usize].clone();
+
+                    match &obj_val {
+                        Value::Instance(inst) => {
+                            inst.borrow_mut().fields.insert(name, value);
+                        }
                         _ => {
                             return Err(self.runtime_error(format!(
-                                "cannot access member '{}' on {}",
+                                "cannot set field '{}' on {}",
                                 name,
-                                module_val.type_name()
+                                obj_val.type_name()
                             )));
                         }
                     }

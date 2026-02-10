@@ -186,6 +186,11 @@ impl Compiler {
             } => self.compile_for(init.as_deref(), condition.as_ref(), update.as_ref(), body),
             Stmt::Break { span } => self.compile_break(*span),
             Stmt::Continue { span } => self.compile_continue(*span),
+            Stmt::ClassDecl {
+                name,
+                methods,
+                span,
+            } => self.compile_class_decl(name, methods, *span),
         }
     }
 
@@ -349,6 +354,96 @@ impl Compiler {
         };
         let mod_val = Value::Module(Rc::new(module));
         let const_idx = self.add_constant(mod_val);
+        let dst = self.alloc_reg();
+        self.emit(Instruction::LoadConst {
+            dst,
+            idx: const_idx,
+        });
+
+        if self.scope_depth == 0 {
+            let name_idx = self.add_name(name);
+            self.emit(Instruction::SetGlobal { name_idx, src: dst });
+            self.free_reg(dst);
+        } else {
+            self.locals.push(Local {
+                name: name.to_string(),
+                slot: dst,
+                depth: self.scope_depth,
+                is_const: true,
+            });
+        }
+
+        Ok(())
+    }
+
+    /// Compiles a class declaration.
+    ///
+    /// Each method is compiled in a fresh `Compiler` with `self` injected
+    /// at register slot 0. The `param_count` reflects user-visible params
+    /// only (not counting `self`).
+    fn compile_class_decl(
+        &mut self,
+        name: &str,
+        methods: &[MethodDecl],
+        _span: Span,
+    ) -> CirqResult<()> {
+        let mut compiled_methods = rustc_hash::FxHashMap::default();
+
+        for method in methods {
+            let mut mc = Compiler::new();
+            mc.scope_depth = 1;
+            // `self` occupies slot 0 — always present, not counted in param_count.
+            let self_reg = mc.alloc_reg();
+            mc.locals.push(Local {
+                name: "self".to_string(),
+                slot: self_reg,
+                depth: 1,
+                is_const: false,
+            });
+
+            // Allocate registers for user-declared parameters.
+            for param in &method.params {
+                let reg = mc.alloc_reg();
+                mc.locals.push(Local {
+                    name: param.clone(),
+                    slot: reg,
+                    depth: 1,
+                    is_const: false,
+                });
+            }
+
+            for stmt in &method.body {
+                mc.compile_stmt(stmt)?;
+            }
+
+            // Implicit return: `init` returns `self`, others return `null`.
+            let r = mc.alloc_reg();
+            if method.name == "init" {
+                mc.emit(Instruction::GetLocal { dst: r, slot: 0 });
+            } else {
+                mc.emit(Instruction::LoadNull { dst: r });
+            }
+            mc.emit(Instruction::Return { src: r });
+
+            let compiled = CompiledFunction {
+                name: format!("{}.{}", name, method.name),
+                instructions: mc.instructions,
+                constants: mc.constants,
+                names: mc.names,
+                local_count: mc.max_reg,
+                // param_count = user params only (self is implicit).
+                param_count: method.params.len() as u8,
+            };
+
+            compiled_methods.insert(method.name.clone(), Rc::new(compiled));
+        }
+
+        let class = crate::value::Class {
+            name: name.to_string(),
+            methods: compiled_methods,
+        };
+        let class_val = Value::Class(Rc::new(class));
+        let const_idx = self.add_constant(class_val);
         let dst = self.alloc_reg();
         self.emit(Instruction::LoadConst {
             dst,
@@ -584,6 +679,7 @@ impl Compiler {
             Expr::PostIncDec { op, operand, span } => {
                 self.compile_post_inc_dec(*op, operand, *span)
             }
+            Expr::SelfRef { span } => self.compile_ident("self", *span),
         }
     }
 
@@ -757,6 +853,16 @@ impl Compiler {
                 self.free_reg(idx);
                 self.free_reg(obj);
             }
+            Expr::MemberAccess { object, member, .. } => {
+                let obj = self.compile_expr(object)?;
+                let name_idx = self.add_name(member);
+                self.emit(Instruction::SetMember {
+                    obj,
+                    name_idx,
+                    val: val_reg,
+                });
+                self.free_reg(obj);
+            }
             _ => {
                 return Err(CirqError::compiler("invalid assignment target", span));
             }
@@ -867,6 +973,16 @@ impl Compiler {
                 let idx = self.compile_expr(index)?;
                 self.emit(Instruction::SetIndex { obj, idx, val: dst });
                 self.free_reg(idx);
+                self.free_reg(obj);
+            }
+            Expr::MemberAccess { object, member, .. } => {
+                let obj = self.compile_expr(object)?;
+                let name_idx = self.add_name(member);
+                self.emit(Instruction::SetMember {
+                    obj,
+                    name_idx,
+                    val: dst,
+                });
                 self.free_reg(obj);
             }
             _ => {}
@@ -987,6 +1103,16 @@ impl Compiler {
                 }
                 let name_idx = self.add_name(name);
                 self.emit(Instruction::SetGlobal { name_idx, src: reg });
+            }
+            Expr::MemberAccess { object, member, .. } => {
+                let obj = self.compile_expr(object)?;
+                let name_idx = self.add_name(member);
+                self.emit(Instruction::SetMember {
+                    obj,
+                    name_idx,
+                    val: reg,
+                });
+                self.free_reg(obj);
             }
             _ => {}
         }

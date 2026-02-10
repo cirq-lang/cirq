@@ -35,7 +35,10 @@ mod tests {
         let mut vm = Vm::new();
         let io_mod = IoModule;
         vm.register_module(io_mod.name(), io_mod.build());
-        vm.execute(program).map_err(|e| e.to_string())
+        let result = vm.execute(program).map_err(|e| e.to_string())?;
+
+        // If the program set a `__result` global, return that for inspection.
+        Ok(vm.get_global("__result").unwrap_or(result))
     }
 
     /// Tokenizes source and returns the token kinds (excluding Eof).
@@ -1886,5 +1889,190 @@ mod tests {
             }
         "#)
         .unwrap();
+    }
+
+    // =========================================================================
+    // OOP CLASS TESTS
+    // =========================================================================
+
+    // -- Class: empty class instantiation --
+    #[test]
+    fn class_empty_class() {
+        run(r#"
+            class Empty {}
+            var e = Empty();
+        "#)
+        .unwrap();
+    }
+
+    // -- Class: constructor sets fields via self --
+    #[test]
+    fn class_init_fields() {
+        let result = run(r#"
+            class Point {
+                init(x, y) {
+                    self.x = x;
+                    self.y = y;
+                }
+            }
+            var p = Point(3, 4);
+            var __result = p.x + p.y;
+        "#)
+        .unwrap();
+        assert_eq!(result, Value::Num(7.0));
+    }
+
+    // -- Class: instance method with self access --
+    #[test]
+    fn class_instance_method() {
+        let result = run(r#"
+            class Rect {
+                init(w, h) {
+                    self.w = w;
+                    self.h = h;
+                }
+                area() {
+                    return self.w * self.h;
+                }
+            }
+            var r = Rect(5, 3);
+            var __result = r.area();
+        "#)
+        .unwrap();
+        assert_eq!(result, Value::Num(15.0));
+    }
+
+    // -- Class: method with parameters --
+    #[test]
+    fn class_method_with_params() {
+        let result = run(r#"
+            class Calc {
+                init(base) {
+                    self.base = base;
+                }
+                add(n) {
+                    return self.base + n;
+                }
+            }
+            var c = Calc(10);
+            var __result = c.add(25);
+        "#)
+        .unwrap();
+        assert_eq!(result, Value::Num(35.0));
+    }
+
+    // -- Class: multiple instances are independent --
+    #[test]
+    fn class_multiple_instances() {
+        let result = run(r#"
+            class Counter {
+                init(start) {
+                    self.val = start;
+                }
+                get() {
+                    return self.val;
+                }
+            }
+            var a = Counter(10);
+            var b = Counter(20);
+            var __result = a.get() + b.get();
+        "#)
+        .unwrap();
+        assert_eq!(result, Value::Num(30.0));
+    }
+
+    // -- Class: field mutation after construction --
+    #[test]
+    fn class_field_mutation() {
+        let result = run(r#"
+            class Dog {
+                init(name) {
+                    self.name = name;
+                    self.tricks = 0;
+                }
+                learn() {
+                    self.tricks = self.tricks + 1;
+                }
+                report() {
+                    return self.tricks;
+                }
+            }
+            var d = Dog("Rex");
+            d.learn();
+            d.learn();
+            d.learn();
+            var __result = d.report();
+        "#)
+        .unwrap();
+        assert_eq!(result, Value::Num(3.0));
+    }
+
+    // -- Class: method without init (no constructor) --
+    #[test]
+    fn class_no_init() {
+        let result = run(r#"
+            class Greeter {
+                greet() {
+                    return 42;
+                }
+            }
+            var g = Greeter();
+            var __result = g.greet();
+        "#)
+        .unwrap();
+        assert_eq!(result, Value::Num(42.0));
+    }
+
+    // -- Class: decorative self parameter is stripped --
+    #[test]
+    fn class_decorative_self_param() {
+        let result = run(r#"
+            class Foo {
+                init(self, x) {
+                    self.x = x;
+                }
+                get(self) {
+                    return self.x;
+                }
+            }
+            var f = Foo(99);
+            var __result = f.get();
+        "#)
+        .unwrap();
+        assert_eq!(result, Value::Num(99.0));
+    }
+
+    // -- Class: wrong argument count for init --
+    #[test]
+    fn class_init_wrong_arity() {
+        expect_error(
+            r#"
+            class Pair {
+                init(a, b) {
+                    self.a = a;
+                    self.b = b;
+                }
+            }
+            var p = Pair(1);
+        "#,
+            ErrorKind::Runtime,
+        );
+    }
+
+    // -- Class: accessing non-existent field/method --
+    #[test]
+    fn class_no_such_member() {
+        expect_error(
+            r#"
+            class Box {
+                init(val) {
+                    self.val = val;
+                }
+            }
+            var b = Box(5);
+            var x = b.missing;
+        "#,
+            ErrorKind::Runtime,
+        );
     }
 }

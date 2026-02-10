@@ -73,6 +73,32 @@ pub enum Stmt {
     Break { span: Span },
     /// `continue;`
     Continue { span: Span },
+    /// `class Name { methods... }`
+    ClassDecl {
+        name: String,
+        methods: Vec<MethodDecl>,
+        span: Span,
+    },
+}
+
+// -----------------------------------------------------------------------------
+// METHOD DECLARATION
+// -----------------------------------------------------------------------------
+
+/// A method declaration within a class body.
+///
+/// If `self` appears as the first parameter it is stripped by the parser —
+/// `self` is always implicitly available at slot 0 inside every method.
+#[derive(Debug, Clone)]
+pub struct MethodDecl {
+    /// Method name (e.g., `init`, `greet`).
+    pub name: String,
+    /// Parameter names (`self` stripped if present as first param).
+    pub params: Vec<String>,
+    /// Method body statements.
+    pub body: Vec<Stmt>,
+    /// Source location.
+    pub span: Span,
 }
 
 // -----------------------------------------------------------------------------
@@ -155,6 +181,8 @@ pub enum Expr {
         operand: Box<Expr>,
         span: Span,
     },
+    /// `self` reference inside a method body.
+    SelfRef { span: Span },
 }
 
 // -----------------------------------------------------------------------------

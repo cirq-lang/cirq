@@ -1,0 +1,126 @@
+// Todo App — Cirq (OOP)
+
+class Todo {
+    init(text) {
+        self.text = text;
+        self.done = false;
+    }
+
+    mark_done() {
+        self.done = true;
+    }
+
+    display(index) {
+        var status = " ";
+        if (self.done) {
+            status = "x";
+        }
+        io.printn("  \(index). [\(status)] \(self.text)");
+    }
+}
+
+class TodoApp {
+    init() {
+        self.todos = [];
+        self.count = 0;
+        self.running = true;
+    }
+
+    show_menu() {
+        io.printn("");
+        io.printn("Todo List");
+        io.printn("1) Show todos");
+        io.printn("2) Add todo");
+        io.printn("3) Mark done");
+        io.printn("4) Remove todo");
+        io.printn("5) Quit");
+        io.printn("");
+    }
+
+    show_todos() {
+        io.printn("");
+        if (self.count == 0) {
+            io.printn("  No todos yet.");
+            return null;
+        }
+        for (var i = 0; i < self.count; i++) {
+            var todo = self.todos[i];
+            todo.display(i + 1);
+        }
+    }
+
+    add() {
+        var text = io.input("  What needs to be done? ");
+        if (text == "") {
+            io.printn("  Cancelled.");
+            return null;
+        }
+        self.todos[self.count] = Todo(text);
+        self.count = self.count + 1;
+        io.printn("  Added: \(text)");
+    }
+
+    mark_done() {
+        if (self.count == 0) {
+            io.printn("  Nothing to mark.");
+            return null;
+        }
+        self.show_todos();
+        var idx_str = io.input("  Mark which number? ");
+        var idx = idx_str - 1;
+        if (idx < 0 || idx >= self.count) {
+            io.printn("  Invalid number.");
+            return null;
+        }
+        var todo = self.todos[idx];
+        todo.mark_done();
+        io.printn("  Done: \(todo.text)");
+    }
+
+    remove() {
+        if (self.count == 0) {
+            io.printn("  Nothing to remove.");
+            return null;
+        }
+        self.show_todos();
+        var idx_str = io.input("  Remove which number? ");
+        var idx = idx_str - 1;
+        if (idx < 0 || idx >= self.count) {
+            io.printn("  Invalid number.");
+            return null;
+        }
+        var removed = self.todos[idx];
+        // Shift remaining items left
+        for (var i = idx; i < self.count - 1; i++) {
+            self.todos[i] = self.todos[i + 1];
+        }
+        self.count = self.count - 1;
+        io.printn("  Removed: \(removed.text)");
+    }
+
+    run() {
+        while (self.running) {
+            self.show_menu();
+            var choice = io.input("> ");
+
+            if (choice == "1") {
+                self.show_todos();
+            } else if (choice == "2") {
+                self.add();
+            } else if (choice == "3") {
+                self.mark_done();
+            } else if (choice == "4") {
+                self.remove();
+            } else if (choice == "5") {
+                io.printn("Bye!");
+                self.running = false;
+            } else {
+                io.printn("  Pick 1-5.");
+            }
+        }
+    }
+}
+
+// Entry point
+var app = TodoApp();
+app.run();

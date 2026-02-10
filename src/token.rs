@@ -61,6 +61,10 @@ pub enum TokenKind {
     Break,
     /// `continue`
     Continue,
+    /// `class`
+    Class,
+    /// `self`
+    SelfKw,
 
     // -- Arithmetic Operators --
     /// `+`
@@ -225,6 +229,8 @@ pub fn lookup_keyword(ident: &str) -> Option<TokenKind> {
         "null" => Some(TokenKind::Null),
         "break" => Some(TokenKind::Break),
         "continue" => Some(TokenKind::Continue),
+        "class" => Some(TokenKind::Class),
+        "self" => Some(TokenKind::SelfKw),
         _ => None,
     }
 }

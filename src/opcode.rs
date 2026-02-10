@@ -126,10 +126,13 @@ pub enum Instruction {
     /// `array[index] = val`
     SetIndex { obj: u8, idx: u8, val: u8 },
 
-    // -- Modules --
-    /// Loads a member from a module. `mod_reg` is the register holding
-    /// the module value, `name_idx` is the member name in the constant pool.
+    // -- Members (modules, instances) --
+    /// Loads a member from a module or instance field/method.
+    /// `obj` is the register holding the object, `name_idx` indexes the
+    /// name pool for the member name.
     GetMember { dst: u8, obj: u8, name_idx: u16 },
+    /// Sets a field on an instance: `obj.field = val`.
+    SetMember { obj: u8, name_idx: u16, val: u8 },
 
     // -- String Interpolation --
     /// Concatenates `count` consecutive registers (starting at `start`)
