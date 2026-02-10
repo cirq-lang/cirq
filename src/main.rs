@@ -1,20 +1,26 @@
-use std::env;
+use clap::Parser;
 use std::process;
 
-use cirq::builtin::{BuiltinModule, EnvModule, IoModule, MathModule, TimeModule};
+use cirq::builtin::{self, BuiltinModule, EnvModule, IoModule, MathModule, TimeModule};
 use cirq::compiler::Compiler;
 use cirq::lexer::Lexer;
-use cirq::parser::Parser;
+use cirq::parser::Parser as CirqParser;
 use cirq::vm::Vm;
+
+#[derive(Parser)]
+#[command(name = "cirq")]
+#[command(about = "A simple interpreter for the Cirq language", long_about = None)]
+struct Cli {
+    file: String,
+
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+    args: Vec<String>,
+}
+
 fn main() {
-    let args: Vec<String> = env::args().collect();
+    let cli = Cli::parse();
 
-    if args.len() != 2 {
-        eprintln!("Usage: cirq <file.cq>");
-        process::exit(1);
-    }
-
-    let path = &args[1];
+    let path = &cli.file;
     let source = match std::fs::read_to_string(path) {
         Ok(s) => s,
         Err(e) => {
@@ -22,6 +28,10 @@ fn main() {
             process::exit(1);
         }
     };
+
+    let mut script_args = cli.args;
+    script_args.insert(0, cli.file.clone());
+    builtin::set_script_args(script_args);
 
     if let Err(e) = run(&source) {
         eprintln!("{}", e);
@@ -33,7 +43,7 @@ fn run(source: &str) -> Result<(), cirq::error::CirqError> {
     let mut lexer = Lexer::new(source);
     let tokens = lexer.tokenize()?;
 
-    let mut parser = Parser::new(tokens);
+    let mut parser = CirqParser::new(tokens);
     let ast = parser.parse()?;
 
     let compiler = Compiler::new();

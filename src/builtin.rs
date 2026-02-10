@@ -4,6 +4,13 @@ use rustc_hash::FxHashMap;
 use std::cell::RefCell;
 use std::io::{self, BufRead, Read, Write};
 use std::rc::Rc;
+use std::sync::OnceLock;
+
+static SCRIPT_ARGS: OnceLock<Vec<String>> = OnceLock::new();
+
+pub fn set_script_args(args: Vec<String>) {
+    let _ = SCRIPT_ARGS.set(args);
+}
 
 pub struct NativeClassDef {
     pub name: &'static str,
@@ -750,7 +757,13 @@ fn env_vars(_args: &[Value]) -> Result<Value, String> {
 }
 
 fn env_args(_args: &[Value]) -> Result<Value, String> {
-    let args: Vec<Value> = std::env::args().map(|a| Value::Str(Rc::new(a))).collect();
+    let args: Vec<Value> = SCRIPT_ARGS
+        .get()
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|a| Value::Str(Rc::new(a)))
+        .collect();
     Ok(Value::Array(Rc::new(RefCell::new(args))))
 }
 
