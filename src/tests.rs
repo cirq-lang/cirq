@@ -6,7 +6,7 @@
 
 #[cfg(test)]
 mod tests {
-    use crate::builtin::{BuiltinModule, IoModule};
+    use crate::builtin::{BuiltinModule, IoModule, MathModule};
     use crate::compiler::Compiler;
     use crate::error::ErrorKind;
     use crate::lexer::Lexer;
@@ -35,6 +35,8 @@ mod tests {
         let mut vm = Vm::new();
         let io_mod = IoModule;
         vm.register_module(io_mod.name(), io_mod.build());
+        let math_mod = MathModule;
+        vm.register_module(math_mod.name(), math_mod.build());
         let result = vm.execute(program).map_err(|e| e.to_string())?;
 
         // If the program set a `__result` global, return that for inspection.
@@ -84,6 +86,8 @@ mod tests {
         let mut vm = Vm::new();
         let io_mod = IoModule;
         vm.register_module(io_mod.name(), io_mod.build());
+        let math_mod = MathModule;
+        vm.register_module(math_mod.name(), math_mod.build());
 
         match vm.execute(program) {
             Ok(_) => panic!("Expected {:?} error but program succeeded", kind),
@@ -2074,5 +2078,236 @@ mod tests {
         "#,
             ErrorKind::Runtime,
         );
+    }
+
+    // -------------------------------------------------------------------------
+    // MATH MODULE TESTS
+    // -------------------------------------------------------------------------
+
+    // -- Constants --
+
+    #[test]
+    fn math_pi_constant() {
+        let result = run("var __result = math.PI;").unwrap();
+        assert_eq!(result, Value::Num(std::f64::consts::PI));
+    }
+
+    #[test]
+    fn math_e_constant() {
+        let result = run("var __result = math.E;").unwrap();
+        assert_eq!(result, Value::Num(std::f64::consts::E));
+    }
+
+    // -- Trigonometric --
+
+    #[test]
+    fn math_sin_zero() {
+        let result = run("var __result = math.sin(0);").unwrap();
+        assert_eq!(result, Value::Num(0.0));
+    }
+
+    #[test]
+    fn math_cos_zero() {
+        let result = run("var __result = math.cos(0);").unwrap();
+        assert_eq!(result, Value::Num(1.0));
+    }
+
+    #[test]
+    fn math_tan_zero() {
+        let result = run("var __result = math.tan(0);").unwrap();
+        assert_eq!(result, Value::Num(0.0));
+    }
+
+    #[test]
+    fn math_asin_zero() {
+        let result = run("var __result = math.asin(0);").unwrap();
+        assert_eq!(result, Value::Num(0.0));
+    }
+
+    #[test]
+    fn math_acos_one() {
+        let result = run("var __result = math.acos(1);").unwrap();
+        assert_eq!(result, Value::Num(0.0));
+    }
+
+    #[test]
+    fn math_atan_zero() {
+        let result = run("var __result = math.atan(0);").unwrap();
+        assert_eq!(result, Value::Num(0.0));
+    }
+
+    #[test]
+    fn math_atan2_basic() {
+        let result = run("var __result = math.atan2(1, 1);").unwrap();
+        if let Value::Num(n) = result {
+            assert!((n - std::f64::consts::FRAC_PI_4).abs() < 1e-10);
+        } else {
+            panic!("expected num");
+        }
+    }
+
+    // -- Power & Roots --
+
+    #[test]
+    fn math_sqrt_basic() {
+        let result = run("var __result = math.sqrt(9);").unwrap();
+        assert_eq!(result, Value::Num(3.0));
+    }
+
+    #[test]
+    fn math_cbrt_basic() {
+        let result = run("var __result = math.cbrt(27);").unwrap();
+        assert_eq!(result, Value::Num(3.0));
+    }
+
+    #[test]
+    fn math_pow_basic() {
+        let result = run("var __result = math.pow(2, 10);").unwrap();
+        assert_eq!(result, Value::Num(1024.0));
+    }
+
+    // -- Logarithmic & Exponential --
+
+    #[test]
+    fn math_log_e() {
+        let result = run("var __result = math.log(math.E);").unwrap();
+        if let Value::Num(n) = result {
+            assert!((n - 1.0).abs() < 1e-10);
+        } else {
+            panic!("expected num");
+        }
+    }
+
+    #[test]
+    fn math_log2_basic() {
+        let result = run("var __result = math.log2(8);").unwrap();
+        assert_eq!(result, Value::Num(3.0));
+    }
+
+    #[test]
+    fn math_log10_basic() {
+        let result = run("var __result = math.log10(1000);").unwrap();
+        if let Value::Num(n) = result {
+            assert!((n - 3.0).abs() < 1e-10);
+        } else {
+            panic!("expected num");
+        }
+    }
+
+    #[test]
+    fn math_exp_zero() {
+        let result = run("var __result = math.exp(0);").unwrap();
+        assert_eq!(result, Value::Num(1.0));
+    }
+
+    #[test]
+    fn math_exp_one() {
+        let result = run("var __result = math.exp(1);").unwrap();
+        if let Value::Num(n) = result {
+            assert!((n - std::f64::consts::E).abs() < 1e-10);
+        } else {
+            panic!("expected num");
+        }
+    }
+
+    // -- Min, Max, Clamp --
+
+    #[test]
+    fn math_min_basic() {
+        let result = run("var __result = math.min(3, 7);").unwrap();
+        assert_eq!(result, Value::Num(3.0));
+    }
+
+    #[test]
+    fn math_max_basic() {
+        let result = run("var __result = math.max(3, 7);").unwrap();
+        assert_eq!(result, Value::Num(7.0));
+    }
+
+    #[test]
+    fn math_clamp_within() {
+        let result = run("var __result = math.clamp(5, 0, 10);").unwrap();
+        assert_eq!(result, Value::Num(5.0));
+    }
+
+    #[test]
+    fn math_clamp_below() {
+        let result = run("var __result = math.clamp(-5, 0, 10);").unwrap();
+        assert_eq!(result, Value::Num(0.0));
+    }
+
+    #[test]
+    fn math_clamp_above() {
+        let result = run("var __result = math.clamp(15, 0, 10);").unwrap();
+        assert_eq!(result, Value::Num(10.0));
+    }
+
+    // -- Sign --
+
+    #[test]
+    fn math_sign_positive() {
+        let result = run("var __result = math.sign(42);").unwrap();
+        assert_eq!(result, Value::Num(1.0));
+    }
+
+    #[test]
+    fn math_sign_negative() {
+        let result = run("var __result = math.sign(-7);").unwrap();
+        assert_eq!(result, Value::Num(-1.0));
+    }
+
+    #[test]
+    fn math_sign_zero() {
+        let result = run("var __result = math.sign(0);").unwrap();
+        assert_eq!(result, Value::Num(0.0));
+    }
+
+    // -- Random --
+
+    #[test]
+    fn math_random_in_range() {
+        let result = run("var __result = math.random();").unwrap();
+        if let Value::Num(n) = result {
+            assert!(
+                n >= 0.0 && n < 1.0,
+                "random() returned {} (out of [0,1))",
+                n
+            );
+        } else {
+            panic!("expected num");
+        }
+    }
+
+    // -- Error handling --
+
+    #[test]
+    fn math_sin_type_error() {
+        expect_error(
+            r#"var x = math.sin("hello");
+"#,
+            ErrorKind::Runtime,
+        );
+    }
+
+    #[test]
+    fn math_min_type_error() {
+        expect_error(
+            r#"var x = math.min(1, "two");
+"#,
+            ErrorKind::Runtime,
+        );
+    }
+
+    // -- Integration: using constants in expressions --
+
+    #[test]
+    fn math_circle_area() {
+        // area = PI * r^2, with r = 5
+        let result = run("var __result = math.PI * 5 ** 2;").unwrap();
+        if let Value::Num(n) = result {
+            assert!((n - std::f64::consts::PI * 25.0).abs() < 1e-10);
+        } else {
+            panic!("expected num");
+        }
     }
 }

@@ -7,7 +7,7 @@
 use std::env;
 use std::process;
 
-use cirq::builtin::{BuiltinModule, IoModule};
+use cirq::builtin::{BuiltinModule, IoModule, MathModule};
 use cirq::compiler::Compiler;
 use cirq::lexer::Lexer;
 use cirq::parser::Parser;
@@ -60,6 +60,8 @@ fn run(source: &str) -> Result<(), cirq::error::CirqError> {
     // Register builtin modules
     let io_module = IoModule;
     vm.register_module(io_module.name(), io_module.build());
+    let math_module = MathModule;
+    vm.register_module(math_module.name(), math_module.build());
 
     vm.execute(program)?;
 
