@@ -1,7 +1,7 @@
 use std::env;
 use std::process;
 
-use cirq::builtin::{BuiltinModule, IoModule, MathModule};
+use cirq::builtin::{BuiltinModule, EnvModule, IoModule, MathModule, TimeModule};
 use cirq::compiler::Compiler;
 use cirq::lexer::Lexer;
 use cirq::parser::Parser;
@@ -45,6 +45,10 @@ fn run(source: &str) -> Result<(), cirq::error::CirqError> {
     vm.register_module(io_module.name(), io_module.build());
     let math_module = MathModule;
     vm.register_module(math_module.name(), math_module.build());
+    let time_module = TimeModule;
+    vm.register_module(time_module.name(), time_module.build());
+    let env_module = EnvModule;
+    vm.register_module(env_module.name(), env_module.build());
 
     vm.execute(program)?;
 

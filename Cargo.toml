@@ -9,6 +9,7 @@ smallvec = "0.1.2"
 compact_str = "0.9"
 memchr = "2"
 rand = "0.8"
+chrono = "0.4"
 bumpalo = { version = "3", features = ["collections"] }
 thin-vec = "0.2"
 

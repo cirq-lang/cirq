@@ -983,29 +983,63 @@ impl Vm {
                             let instance_val = Value::Instance(instance.clone());
 
                             if let Some(init_method) = class.methods.get("init") {
-                                if arg_count != init_method.param_count {
-                                    return Err(self.runtime_error(format!(
-                                        "'{}' init expects {} arguments, got {}",
-                                        class.name, init_method.param_count, arg_count
-                                    )));
+                                match init_method {
+                                    Value::Fun(func) => {
+                                        if arg_count != func.param_count {
+                                            return Err(self.runtime_error(format!(
+                                                "'{}' init expects {} arguments, got {}",
+                                                class.name, func.param_count, arg_count
+                                            )));
+                                        }
+
+                                        let new_base = self.registers.len();
+                                        let frame_size = func.local_count as usize + 16;
+                                        self.registers.resize(new_base + frame_size, Value::Null);
+
+                                        self.registers[new_base] = instance_val.clone();
+                                        for i in 0..arg_count {
+                                            self.registers[new_base + 1 + i as usize] = self
+                                                .registers
+                                                [base + arg_start as usize + i as usize]
+                                                .clone();
+                                        }
+
+                                        self.frames.push(CallFrame {
+                                            function: func.clone(),
+                                            ip: 0,
+                                            base: new_base,
+                                        });
+                                    }
+                                    Value::NativeFun {
+                                        name, arity, func, ..
+                                    } => {
+                                        if arg_count != *arity {
+                                            return Err(self.runtime_error(format!(
+                                                "'{}' init expects {} arguments, got {}",
+                                                name, arity, arg_count
+                                            )));
+                                        }
+
+                                        let mut args = Vec::with_capacity(1 + arg_count as usize);
+                                        args.push(instance_val.clone());
+                                        for i in 0..arg_count {
+                                            args.push(
+                                                self.registers
+                                                    [base + arg_start as usize + i as usize]
+                                                    .clone(),
+                                            );
+                                        }
+
+                                        func(&args).map_err(|e| {
+                                            CirqError::runtime_no_span(format!("{}: {}", name, e))
+                                        })?;
+                                    }
+                                    _ => {
+                                        return Err(self.runtime_error(
+                                            "class init is not callable".to_string(),
+                                        ));
+                                    }
                                 }
-
-                                let new_base = self.registers.len();
-                                let frame_size = init_method.local_count as usize + 16;
-                                self.registers.resize(new_base + frame_size, Value::Null);
-
-                                self.registers[new_base] = instance_val.clone();
-                                for i in 0..arg_count {
-                                    self.registers[new_base + 1 + i as usize] = self.registers
-                                        [base + arg_start as usize + i as usize]
-                                        .clone();
-                                }
-
-                                self.frames.push(CallFrame {
-                                    function: init_method.clone(),
-                                    ip: 0,
-                                    base: new_base,
-                                });
                             }
 
                             self.registers[base + dst as usize] = instance_val;
@@ -1186,7 +1220,7 @@ impl Vm {
                             } else if let Some(method) = inst_ref.class.methods.get(name) {
                                 self.registers[base + dst as usize] = Value::BoundMethod {
                                     receiver: Box::new(obj_val.clone()),
-                                    method: Box::new(Value::Fun(method.clone())),
+                                    method: Box::new(method.clone()),
                                 };
                             } else {
                                 return Err(self.runtime_error(format!(

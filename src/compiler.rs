@@ -353,7 +353,7 @@ impl Compiler {
                 param_count: method.params.len() as u8,
             };
 
-            compiled_methods.insert(method.name.clone(), Rc::new(compiled));
+            compiled_methods.insert(method.name.clone(), Value::Fun(Rc::new(compiled)));
         }
 
         let class = crate::value::Class {

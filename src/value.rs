@@ -22,7 +22,7 @@ impl Module {
 #[derive(Debug, Clone)]
 pub struct Class {
     pub name: String,
-    pub methods: FxHashMap<String, Rc<CompiledFunction>>,
+    pub methods: FxHashMap<String, Value>,
 }
 #[derive(Debug, Clone)]
 pub struct Instance {
