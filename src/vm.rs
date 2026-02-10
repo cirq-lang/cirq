@@ -54,12 +54,714 @@ pub struct Vm {
 impl Vm {
     /// Creates a new VM instance with the given builtin modules registered.
     pub fn new() -> Self {
-        Self {
+        let mut vm = Self {
             globals: FxHashMap::default(),
             registers: Vec::with_capacity(256),
             frames: Vec::with_capacity(64),
             type_methods: FxHashMap::default(),
-        }
+        };
+        vm.register_builtin_methods();
+        vm
+    }
+
+    // -------------------------------------------------------------------------
+    // BUILTIN TYPE METHODS
+    // -------------------------------------------------------------------------
+    //
+    // All methods go through unified dispatch:
+    //   `val.method(args)` → GetMember (creates BoundMethod) → Call
+    //
+    // For native methods, the receiver is prepended as `args[0]` automatically.
+
+    /// Registers builtin methods for every primitive and collection type.
+    fn register_builtin_methods(&mut self) {
+        self.register_num_methods();
+        self.register_str_methods();
+        self.register_bool_methods();
+        self.register_null_methods();
+        self.register_array_methods();
+    }
+
+    // -- Number methods -------------------------------------------------------
+
+    fn register_num_methods(&mut self) {
+        // n.to_str() → string representation
+        self.register_type_method(
+            "num",
+            "to_str",
+            Value::NativeFun {
+                name: "to_str",
+                arity: 0,
+                func: |args| {
+                    if let Value::Num(n) = &args[0] {
+                        let s = if *n == n.floor() && n.is_finite() {
+                            format!("{}", *n as i64)
+                        } else {
+                            format!("{}", n)
+                        };
+                        Ok(Value::Str(Rc::new(s)))
+                    } else {
+                        Err("to_str called on non-num".to_string())
+                    }
+                },
+            },
+        );
+
+        // n.to_num() → identity
+        self.register_type_method(
+            "num",
+            "to_num",
+            Value::NativeFun {
+                name: "to_num",
+                arity: 0,
+                func: |args| Ok(args[0].clone()),
+            },
+        );
+
+        // n.abs() → absolute value
+        self.register_type_method(
+            "num",
+            "abs",
+            Value::NativeFun {
+                name: "abs",
+                arity: 0,
+                func: |args| {
+                    if let Value::Num(n) = &args[0] {
+                        Ok(Value::Num(n.abs()))
+                    } else {
+                        Err("abs called on non-num".to_string())
+                    }
+                },
+            },
+        );
+
+        // n.floor() → floor
+        self.register_type_method(
+            "num",
+            "floor",
+            Value::NativeFun {
+                name: "floor",
+                arity: 0,
+                func: |args| {
+                    if let Value::Num(n) = &args[0] {
+                        Ok(Value::Num(n.floor()))
+                    } else {
+                        Err("floor called on non-num".to_string())
+                    }
+                },
+            },
+        );
+
+        // n.ceil() → ceiling
+        self.register_type_method(
+            "num",
+            "ceil",
+            Value::NativeFun {
+                name: "ceil",
+                arity: 0,
+                func: |args| {
+                    if let Value::Num(n) = &args[0] {
+                        Ok(Value::Num(n.ceil()))
+                    } else {
+                        Err("ceil called on non-num".to_string())
+                    }
+                },
+            },
+        );
+
+        // n.round() → nearest integer
+        self.register_type_method(
+            "num",
+            "round",
+            Value::NativeFun {
+                name: "round",
+                arity: 0,
+                func: |args| {
+                    if let Value::Num(n) = &args[0] {
+                        Ok(Value::Num(n.round()))
+                    } else {
+                        Err("round called on non-num".to_string())
+                    }
+                },
+            },
+        );
+    }
+
+    // -- String methods -------------------------------------------------------
+
+    fn register_str_methods(&mut self) {
+        // s.to_str() → identity
+        self.register_type_method(
+            "str",
+            "to_str",
+            Value::NativeFun {
+                name: "to_str",
+                arity: 0,
+                func: |args| Ok(args[0].clone()),
+            },
+        );
+
+        // s.to_num() → parse as number
+        self.register_type_method(
+            "str",
+            "to_num",
+            Value::NativeFun {
+                name: "to_num",
+                arity: 0,
+                func: |args| {
+                    if let Value::Str(s) = &args[0] {
+                        match s.trim().parse::<f64>() {
+                            Ok(n) => Ok(Value::Num(n)),
+                            Err(_) => Err(format!("cannot convert '{}' to number", s)),
+                        }
+                    } else {
+                        Err("to_num called on non-str".to_string())
+                    }
+                },
+            },
+        );
+
+        // s.len() → character count
+        self.register_type_method(
+            "str",
+            "len",
+            Value::NativeFun {
+                name: "len",
+                arity: 0,
+                func: |args| {
+                    if let Value::Str(s) = &args[0] {
+                        Ok(Value::Num(s.len() as f64))
+                    } else {
+                        Err("len called on non-str".to_string())
+                    }
+                },
+            },
+        );
+
+        // s.upper() → uppercase copy
+        self.register_type_method(
+            "str",
+            "upper",
+            Value::NativeFun {
+                name: "upper",
+                arity: 0,
+                func: |args| {
+                    if let Value::Str(s) = &args[0] {
+                        Ok(Value::Str(Rc::new(s.to_uppercase())))
+                    } else {
+                        Err("upper called on non-str".to_string())
+                    }
+                },
+            },
+        );
+
+        // s.lower() → lowercase copy
+        self.register_type_method(
+            "str",
+            "lower",
+            Value::NativeFun {
+                name: "lower",
+                arity: 0,
+                func: |args| {
+                    if let Value::Str(s) = &args[0] {
+                        Ok(Value::Str(Rc::new(s.to_lowercase())))
+                    } else {
+                        Err("lower called on non-str".to_string())
+                    }
+                },
+            },
+        );
+
+        // s.trim() → trimmed copy
+        self.register_type_method(
+            "str",
+            "trim",
+            Value::NativeFun {
+                name: "trim",
+                arity: 0,
+                func: |args| {
+                    if let Value::Str(s) = &args[0] {
+                        Ok(Value::Str(Rc::new(s.trim().to_string())))
+                    } else {
+                        Err("trim called on non-str".to_string())
+                    }
+                },
+            },
+        );
+
+        // s.contains(sub) → bool
+        self.register_type_method(
+            "str",
+            "contains",
+            Value::NativeFun {
+                name: "contains",
+                arity: 1,
+                func: |args| {
+                    if let (Value::Str(s), Value::Str(sub)) = (&args[0], &args[1]) {
+                        Ok(Value::Bool(s.contains(sub.as_str())))
+                    } else {
+                        Err("contains expects a string argument".to_string())
+                    }
+                },
+            },
+        );
+
+        // s.split(sep) → array of strings
+        self.register_type_method(
+            "str",
+            "split",
+            Value::NativeFun {
+                name: "split",
+                arity: 1,
+                func: |args| {
+                    if let (Value::Str(s), Value::Str(sep)) = (&args[0], &args[1]) {
+                        let parts: Vec<Value> = s
+                            .split(sep.as_str())
+                            .map(|p| Value::Str(Rc::new(p.to_string())))
+                            .collect();
+                        Ok(Value::Array(Rc::new(RefCell::new(parts))))
+                    } else {
+                        Err("split expects a string separator".to_string())
+                    }
+                },
+            },
+        );
+
+        // s.starts_with(prefix) → bool
+        self.register_type_method(
+            "str",
+            "starts_with",
+            Value::NativeFun {
+                name: "starts_with",
+                arity: 1,
+                func: |args| {
+                    if let (Value::Str(s), Value::Str(pre)) = (&args[0], &args[1]) {
+                        Ok(Value::Bool(s.starts_with(pre.as_str())))
+                    } else {
+                        Err("starts_with expects a string argument".to_string())
+                    }
+                },
+            },
+        );
+
+        // s.ends_with(suffix) → bool
+        self.register_type_method(
+            "str",
+            "ends_with",
+            Value::NativeFun {
+                name: "ends_with",
+                arity: 1,
+                func: |args| {
+                    if let (Value::Str(s), Value::Str(suf)) = (&args[0], &args[1]) {
+                        Ok(Value::Bool(s.ends_with(suf.as_str())))
+                    } else {
+                        Err("ends_with expects a string argument".to_string())
+                    }
+                },
+            },
+        );
+
+        // s.replace(old, new) → new string
+        self.register_type_method(
+            "str",
+            "replace",
+            Value::NativeFun {
+                name: "replace",
+                arity: 2,
+                func: |args| {
+                    if let (Value::Str(s), Value::Str(old), Value::Str(new)) =
+                        (&args[0], &args[1], &args[2])
+                    {
+                        Ok(Value::Str(Rc::new(s.replace(old.as_str(), new.as_str()))))
+                    } else {
+                        Err("replace expects two string arguments".to_string())
+                    }
+                },
+            },
+        );
+
+        // s.slice(start, end) → substring
+        self.register_type_method(
+            "str",
+            "slice",
+            Value::NativeFun {
+                name: "slice",
+                arity: 2,
+                func: |args| {
+                    if let (Value::Str(s), Value::Num(start), Value::Num(end)) =
+                        (&args[0], &args[1], &args[2])
+                    {
+                        let len = s.len() as i64;
+                        let a = (*start as i64).max(0).min(len) as usize;
+                        let b = (*end as i64).max(0).min(len) as usize;
+                        if a <= b {
+                            Ok(Value::Str(Rc::new(s[a..b].to_string())))
+                        } else {
+                            Ok(Value::Str(Rc::new(String::new())))
+                        }
+                    } else {
+                        Err("slice expects two number arguments".to_string())
+                    }
+                },
+            },
+        );
+
+        // s.index_of(sub) → position or -1
+        self.register_type_method(
+            "str",
+            "index_of",
+            Value::NativeFun {
+                name: "index_of",
+                arity: 1,
+                func: |args| {
+                    if let (Value::Str(s), Value::Str(sub)) = (&args[0], &args[1]) {
+                        match s.find(sub.as_str()) {
+                            Some(pos) => Ok(Value::Num(pos as f64)),
+                            None => Ok(Value::Num(-1.0)),
+                        }
+                    } else {
+                        Err("index_of expects a string argument".to_string())
+                    }
+                },
+            },
+        );
+
+        // s.chars() → array of single-character strings
+        self.register_type_method(
+            "str",
+            "chars",
+            Value::NativeFun {
+                name: "chars",
+                arity: 0,
+                func: |args| {
+                    if let Value::Str(s) = &args[0] {
+                        let chars: Vec<Value> = s
+                            .chars()
+                            .map(|c| Value::Str(Rc::new(c.to_string())))
+                            .collect();
+                        Ok(Value::Array(Rc::new(RefCell::new(chars))))
+                    } else {
+                        Err("chars called on non-str".to_string())
+                    }
+                },
+            },
+        );
+    }
+
+    // -- Bool methods ---------------------------------------------------------
+
+    fn register_bool_methods(&mut self) {
+        // b.to_str() → "true" / "false"
+        self.register_type_method(
+            "bool",
+            "to_str",
+            Value::NativeFun {
+                name: "to_str",
+                arity: 0,
+                func: |args| {
+                    if let Value::Bool(b) = &args[0] {
+                        Ok(Value::Str(Rc::new(b.to_string())))
+                    } else {
+                        Err("to_str called on non-bool".to_string())
+                    }
+                },
+            },
+        );
+
+        // b.to_num() → 1 / 0
+        self.register_type_method(
+            "bool",
+            "to_num",
+            Value::NativeFun {
+                name: "to_num",
+                arity: 0,
+                func: |args| {
+                    if let Value::Bool(b) = &args[0] {
+                        Ok(Value::Num(if *b { 1.0 } else { 0.0 }))
+                    } else {
+                        Err("to_num called on non-bool".to_string())
+                    }
+                },
+            },
+        );
+    }
+
+    // -- Null methods ---------------------------------------------------------
+
+    fn register_null_methods(&mut self) {
+        // null.to_str() → "null"
+        self.register_type_method(
+            "null",
+            "to_str",
+            Value::NativeFun {
+                name: "to_str",
+                arity: 0,
+                func: |_| Ok(Value::Str(Rc::new("null".to_string()))),
+            },
+        );
+
+        // null.to_num() → 0
+        self.register_type_method(
+            "null",
+            "to_num",
+            Value::NativeFun {
+                name: "to_num",
+                arity: 0,
+                func: |_| Ok(Value::Num(0.0)),
+            },
+        );
+    }
+
+    // -- Array methods --------------------------------------------------------
+
+    fn register_array_methods(&mut self) {
+        // arr.push(item) — appends item, returns null
+        self.register_type_method(
+            "array",
+            "push",
+            Value::NativeFun {
+                name: "push",
+                arity: 1,
+                func: |args| {
+                    if let Value::Array(arr) = &args[0] {
+                        arr.borrow_mut().push(args[1].clone());
+                        Ok(Value::Null)
+                    } else {
+                        Err("push called on non-array".to_string())
+                    }
+                },
+            },
+        );
+
+        // arr.pop() — removes and returns last element
+        self.register_type_method(
+            "array",
+            "pop",
+            Value::NativeFun {
+                name: "pop",
+                arity: 0,
+                func: |args| {
+                    if let Value::Array(arr) = &args[0] {
+                        arr.borrow_mut()
+                            .pop()
+                            .ok_or_else(|| "pop on empty array".to_string())
+                    } else {
+                        Err("pop called on non-array".to_string())
+                    }
+                },
+            },
+        );
+
+        // arr.len() — returns element count
+        self.register_type_method(
+            "array",
+            "len",
+            Value::NativeFun {
+                name: "len",
+                arity: 0,
+                func: |args| {
+                    if let Value::Array(arr) = &args[0] {
+                        Ok(Value::Num(arr.borrow().len() as f64))
+                    } else {
+                        Err("len called on non-array".to_string())
+                    }
+                },
+            },
+        );
+
+        // arr.remove(index) — removes element at index, returns it
+        self.register_type_method(
+            "array",
+            "remove",
+            Value::NativeFun {
+                name: "remove",
+                arity: 1,
+                func: |args| {
+                    if let Value::Array(arr) = &args[0] {
+                        if let Value::Num(n) = &args[1] {
+                            let idx = *n as usize;
+                            let mut elems = arr.borrow_mut();
+                            if idx >= elems.len() {
+                                return Err(format!(
+                                    "remove index {} out of bounds (length {})",
+                                    idx,
+                                    elems.len()
+                                ));
+                            }
+                            Ok(elems.remove(idx))
+                        } else {
+                            Err("remove index must be a number".to_string())
+                        }
+                    } else {
+                        Err("remove called on non-array".to_string())
+                    }
+                },
+            },
+        );
+
+        // arr.insert(index, item) — inserts item at index
+        self.register_type_method(
+            "array",
+            "insert",
+            Value::NativeFun {
+                name: "insert",
+                arity: 2,
+                func: |args| {
+                    if let Value::Array(arr) = &args[0] {
+                        if let Value::Num(n) = &args[1] {
+                            let idx = *n as usize;
+                            let mut elems = arr.borrow_mut();
+                            if idx > elems.len() {
+                                return Err(format!(
+                                    "insert index {} out of bounds (length {})",
+                                    idx,
+                                    elems.len()
+                                ));
+                            }
+                            elems.insert(idx, args[2].clone());
+                            Ok(Value::Null)
+                        } else {
+                            Err("insert index must be a number".to_string())
+                        }
+                    } else {
+                        Err("insert called on non-array".to_string())
+                    }
+                },
+            },
+        );
+
+        // arr.contains(item) → bool
+        self.register_type_method(
+            "array",
+            "contains",
+            Value::NativeFun {
+                name: "contains",
+                arity: 1,
+                func: |args| {
+                    if let Value::Array(arr) = &args[0] {
+                        let found = arr.borrow().iter().any(|v| *v == args[1]);
+                        Ok(Value::Bool(found))
+                    } else {
+                        Err("contains called on non-array".to_string())
+                    }
+                },
+            },
+        );
+
+        // arr.index_of(item) → position or -1
+        self.register_type_method(
+            "array",
+            "index_of",
+            Value::NativeFun {
+                name: "index_of",
+                arity: 1,
+                func: |args| {
+                    if let Value::Array(arr) = &args[0] {
+                        let pos = arr.borrow().iter().position(|v| *v == args[1]);
+                        match pos {
+                            Some(i) => Ok(Value::Num(i as f64)),
+                            None => Ok(Value::Num(-1.0)),
+                        }
+                    } else {
+                        Err("index_of called on non-array".to_string())
+                    }
+                },
+            },
+        );
+
+        // arr.join(sep) → string
+        self.register_type_method(
+            "array",
+            "join",
+            Value::NativeFun {
+                name: "join",
+                arity: 1,
+                func: |args| {
+                    if let (Value::Array(arr), Value::Str(sep)) = (&args[0], &args[1]) {
+                        let parts: Vec<String> =
+                            arr.borrow().iter().map(|v| v.to_display_string()).collect();
+                        Ok(Value::Str(Rc::new(parts.join(sep.as_str()))))
+                    } else {
+                        Err("join expects a string separator".to_string())
+                    }
+                },
+            },
+        );
+
+        // arr.reverse() — reverses in place, returns null
+        self.register_type_method(
+            "array",
+            "reverse",
+            Value::NativeFun {
+                name: "reverse",
+                arity: 0,
+                func: |args| {
+                    if let Value::Array(arr) = &args[0] {
+                        arr.borrow_mut().reverse();
+                        Ok(Value::Null)
+                    } else {
+                        Err("reverse called on non-array".to_string())
+                    }
+                },
+            },
+        );
+
+        // arr.slice(start, end) → new sub-array
+        self.register_type_method(
+            "array",
+            "slice",
+            Value::NativeFun {
+                name: "slice",
+                arity: 2,
+                func: |args| {
+                    if let (Value::Array(arr), Value::Num(start), Value::Num(end)) =
+                        (&args[0], &args[1], &args[2])
+                    {
+                        let elems = arr.borrow();
+                        let len = elems.len() as i64;
+                        let a = (*start as i64).max(0).min(len) as usize;
+                        let b = (*end as i64).max(0).min(len) as usize;
+                        let sub = if a <= b {
+                            elems[a..b].to_vec()
+                        } else {
+                            Vec::new()
+                        };
+                        Ok(Value::Array(Rc::new(RefCell::new(sub))))
+                    } else {
+                        Err("slice expects two number arguments".to_string())
+                    }
+                },
+            },
+        );
+
+        // arr.clear() — removes all elements, returns null
+        self.register_type_method(
+            "array",
+            "clear",
+            Value::NativeFun {
+                name: "clear",
+                arity: 0,
+                func: |args| {
+                    if let Value::Array(arr) = &args[0] {
+                        arr.borrow_mut().clear();
+                        Ok(Value::Null)
+                    } else {
+                        Err("clear called on non-array".to_string())
+                    }
+                },
+            },
+        );
+
+        // arr.to_str() → string representation
+        self.register_type_method(
+            "array",
+            "to_str",
+            Value::NativeFun {
+                name: "to_str",
+                arity: 0,
+                func: |args| Ok(Value::Str(Rc::new(args[0].to_display_string()))),
+            },
+        );
     }
 
     /// Registers a builtin method for a given type name.
@@ -67,7 +769,6 @@ impl Vm {
     /// This enables unified method dispatch: `arr.len()`, `str.len()`,
     /// etc. go through the same `GetMember` → `BoundMethod` → `Call`
     /// path as user-defined class methods.
-    #[allow(dead_code)]
     pub fn register_type_method(
         &mut self,
         type_name: &'static str,

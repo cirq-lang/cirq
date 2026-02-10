@@ -22,7 +22,6 @@ class Todo {
 class TodoApp {
     init() {
         self.todos = [];
-        self.count = 0;
         self.running = true;
     }
 
@@ -39,11 +38,12 @@ class TodoApp {
 
     show_todos() {
         io.printn("");
-        if (self.count == 0) {
+        var count = self.todos.len();
+        if (count == 0) {
             io.printn("  No todos yet.");
             return null;
         }
-        for (var i = 0; i < self.count; i++) {
+        for (var i = 0; i < count; i++) {
             var todo = self.todos[i];
             todo.display(i + 1);
         }
@@ -55,20 +55,20 @@ class TodoApp {
             io.printn("  Cancelled.");
             return null;
         }
-        self.todos[self.count] = Todo(text);
-        self.count = self.count + 1;
+        self.todos.push(Todo(text));
         io.printn("  Added: \(text)");
     }
 
     mark_done() {
-        if (self.count == 0) {
+        var count = self.todos.len();
+        if (count == 0) {
             io.printn("  Nothing to mark.");
             return null;
         }
         self.show_todos();
         var idx_str = io.input("  Mark which number? ");
-        var idx = idx_str - 1;
-        if (idx < 0 || idx >= self.count) {
+        var idx = idx_str.to_num() - 1;
+        if (idx < 0 || idx >= count) {
             io.printn("  Invalid number.");
             return null;
         }
@@ -78,23 +78,19 @@ class TodoApp {
     }
 
     remove() {
-        if (self.count == 0) {
+        var count = self.todos.len();
+        if (count == 0) {
             io.printn("  Nothing to remove.");
             return null;
         }
         self.show_todos();
         var idx_str = io.input("  Remove which number? ");
-        var idx = idx_str - 1;
-        if (idx < 0 || idx >= self.count) {
+        var idx = idx_str.to_num() - 1;
+        if (idx < 0 || idx >= count) {
             io.printn("  Invalid number.");
             return null;
         }
-        var removed = self.todos[idx];
-        // Shift remaining items left
-        for (var i = idx; i < self.count - 1; i++) {
-            self.todos[i] = self.todos[i + 1];
-        }
-        self.count = self.count - 1;
+        var removed = self.todos.remove(idx);
         io.printn("  Removed: \(removed.text)");
     }
 
