@@ -1,5 +1,3 @@
-// Todo App — Cirq (OOP)
-
 class Todo {
     init(text) {
         self.text = text;
