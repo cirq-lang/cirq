@@ -1,9 +1,3 @@
-//! # Tests Module
-//!
-//! Comprehensive unit and integration tests for the entire Cirq interpreter
-//! pipeline. Covers lexer, parser, compiler, VM, value semantics, builtins,
-//! and end-to-end integration tests for all language features and edge cases.
-
 #[cfg(test)]
 mod tests {
     use crate::builtin::{BuiltinModule, IoModule, MathModule};
@@ -16,14 +10,6 @@ mod tests {
     use crate::vm::Vm;
 
     use std::rc::Rc;
-
-    // -------------------------------------------------------------------------
-    // HELPERS — Run Cirq source through the full pipeline
-    // -------------------------------------------------------------------------
-
-    /// Runs source through lex → parse → compile → execute, returning the
-    /// last global variable named `__result` for value inspection.
-    /// Programs should set `var __result = <expr>;` to export test values.
     fn run(source: &str) -> Result<Value, String> {
         let mut lexer = Lexer::new(source);
         let tokens = lexer.tokenize().map_err(|e| e.to_string())?;
@@ -39,11 +25,9 @@ mod tests {
         vm.register_module(math_mod.name(), math_mod.build());
         let result = vm.execute(program).map_err(|e| e.to_string())?;
 
-        // If the program set a `__result` global, return that for inspection.
         Ok(vm.get_global("__result").unwrap_or(result))
     }
 
-    /// Tokenizes source and returns the token kinds (excluding Eof).
     fn tokenize(source: &str) -> Result<Vec<TokenKind>, String> {
         let mut lexer = Lexer::new(source);
         let tokens = lexer.tokenize().map_err(|e| e.to_string())?;
@@ -54,7 +38,6 @@ mod tests {
             .collect())
     }
 
-    /// Runs source and expects a specific error kind.
     fn expect_error(source: &str, kind: ErrorKind) {
         let mut lexer = Lexer::new(source);
         let tokens = match lexer.tokenize() {
@@ -96,11 +79,6 @@ mod tests {
             }
         }
     }
-
-    // -------------------------------------------------------------------------
-    // LEXER TESTS
-    // -------------------------------------------------------------------------
-
     #[test]
     fn lexer_integer_literals() {
         let kinds = tokenize("42").unwrap();
@@ -359,11 +337,6 @@ mod tests {
             ]
         );
     }
-
-    // -------------------------------------------------------------------------
-    // VALUE TESTS
-    // -------------------------------------------------------------------------
-
     #[test]
     fn value_truthiness_null() {
         assert!(!Value::Null.is_truthy());
@@ -468,12 +441,6 @@ mod tests {
         assert_ne!(Value::Bool(false), Value::Null);
     }
 
-    // -------------------------------------------------------------------------
-    // INTEGRATION TESTS — Full Pipeline (source → result)
-    // -------------------------------------------------------------------------
-
-    // -- Variable Declarations --
-
     #[test]
     fn integration_var_declaration_with_value() {
         run("var x = 42;").unwrap();
@@ -488,9 +455,6 @@ mod tests {
     fn integration_const_declaration() {
         run("const PI = 3.14;").unwrap();
     }
-
-    // -- Arithmetic --
-
     #[test]
     fn integration_addition() {
         run("var x = 10 + 20;").unwrap();
@@ -540,9 +504,6 @@ mod tests {
     fn integration_nested_parentheses() {
         run("var x = ((1 + 2) * (3 + 4));").unwrap();
     }
-
-    // -- Comparison --
-
     #[test]
     fn integration_equality() {
         run("var x = 1 == 1;").unwrap();
@@ -572,9 +533,6 @@ mod tests {
     fn integration_greater_equal() {
         run("var x = 2 >= 2;").unwrap();
     }
-
-    // -- Logical --
-
     #[test]
     fn integration_logical_and() {
         run("var x = true && true;").unwrap();
@@ -587,18 +545,13 @@ mod tests {
 
     #[test]
     fn integration_logical_short_circuit_and() {
-        // false && (side_effect) — right side should not be evaluated
         run("var x = false && (1 / 0 > 0);").unwrap();
     }
 
     #[test]
     fn integration_logical_short_circuit_or() {
-        // true || (side_effect) — right side should not be evaluated
         run("var x = true || (1 / 0 > 0);").unwrap();
     }
-
-    // -- Bitwise --
-
     #[test]
     fn integration_bitwise_and() {
         run("var x = 0xFF & 0x0F;").unwrap();
@@ -628,9 +581,6 @@ mod tests {
     fn integration_shift_right() {
         run("var x = 8 >> 2;").unwrap();
     }
-
-    // -- Assignment & Compound Assignment --
-
     #[test]
     fn integration_assignment() {
         run("var x = 1; x = 2;").unwrap();
@@ -685,9 +635,6 @@ mod tests {
     fn integration_compound_shr() {
         run("var x = 8; x >>= 2;").unwrap();
     }
-
-    // -- Strings --
-
     #[test]
     fn integration_string_literal() {
         run(r#"var s = "hello";"#).unwrap();
@@ -717,42 +664,33 @@ mod tests {
     fn integration_string_escape_tab() {
         run(r#"var s = "col1\tcol2";"#).unwrap();
     }
-
-    // -- String Interpolation --
-
     #[test]
     fn integration_interp_single_variable() {
-        // Basic: interpolate one variable in the middle of a string.
         run(r#"var name = "world"; var s = "hello \(name)!";"#).unwrap();
     }
 
     #[test]
     fn integration_interp_number() {
-        // Interpolate a numeric value — should be converted to string.
         run(r#"var n = 42; var s = "value: \(n)";"#).unwrap();
     }
 
     #[test]
     fn integration_interp_bool() {
-        // Interpolate a boolean value.
         run(r#"var b = true; var s = "flag: \(b)";"#).unwrap();
     }
 
     #[test]
     fn integration_interp_null() {
-        // Interpolate null value.
         run(r#"var s = "nothing: \(null)";"#).unwrap();
     }
 
     #[test]
     fn integration_interp_expression() {
-        // Interpolate an arithmetic expression, not just a variable.
         run(r#"var s = "sum: \(1 + 2 + 3)";"#).unwrap();
     }
 
     #[test]
     fn integration_interp_complex_expression() {
-        // Interpolate a more complex expression with function call.
         run(r#"
             fun double(x) { return x * 2; }
             var s = "result: \(double(21))";
@@ -762,7 +700,6 @@ mod tests {
 
     #[test]
     fn integration_interp_multiple() {
-        // Multiple interpolation holes in one string.
         run(r#"
             var a = "hello";
             var b = "world";
@@ -773,7 +710,6 @@ mod tests {
 
     #[test]
     fn integration_interp_adjacent() {
-        // Two interpolation holes directly adjacent (no literal between).
         run(r#"
             var x = "foo";
             var y = "bar";
@@ -784,37 +720,31 @@ mod tests {
 
     #[test]
     fn integration_interp_at_start() {
-        // Interpolation at the very start of the string.
         run(r#"var x = 42; var s = "\(x) is the answer";"#).unwrap();
     }
 
     #[test]
     fn integration_interp_at_end() {
-        // Interpolation at the very end of the string.
         run(r#"var x = 42; var s = "the answer is \(x)";"#).unwrap();
     }
 
     #[test]
     fn integration_interp_only_expression() {
-        // String that is entirely an interpolation (no surrounding text).
         run(r#"var x = "test"; var s = "\(x)";"#).unwrap();
     }
 
     #[test]
     fn integration_interp_empty_string_value() {
-        // Interpolate a variable holding an empty string.
         run(r#"var e = ""; var s = "before\(e)after";"#).unwrap();
     }
 
     #[test]
     fn integration_interp_array() {
-        // Interpolate an array — should display as [1, 2, 3].
         run(r#"var arr = [1, 2, 3]; var s = "arr: \(arr)";"#).unwrap();
     }
 
     #[test]
     fn integration_interp_three_parts() {
-        // Three interpolation holes with literals between each.
         run(r#"
             var a = 1;
             var b = 2;
@@ -826,7 +756,6 @@ mod tests {
 
     #[test]
     fn integration_interp_nested_call() {
-        // Interpolation containing a nested function call result.
         run(r#"
             fun greet(name) { return "hi " + name; }
             var s = "message: \(greet("user"))";
@@ -836,7 +765,6 @@ mod tests {
 
     #[test]
     fn integration_interp_with_io_printn() {
-        // Use interpolated string with io.printn for output.
         run(r#"
             var name = "cirq";
             var ver = 1;
@@ -844,9 +772,6 @@ mod tests {
         "#)
         .unwrap();
     }
-
-    // -- Arrays --
-
     #[test]
     fn integration_array_literal() {
         run("var arr = [1, 2, 3];").unwrap();
@@ -876,9 +801,6 @@ mod tests {
     fn integration_array_nested() {
         run("var arr = [[1, 2], [3, 4]]; var x = arr[0][1];").unwrap();
     }
-
-    // -- Control Flow: If/Else --
-
     #[test]
     fn integration_if_true() {
         run("var x = 0; if (true) { x = 1; }").unwrap();
@@ -918,9 +840,6 @@ mod tests {
     fn integration_if_null_condition() {
         run("var x = 0; if (null) { x = 1; }").unwrap();
     }
-
-    // -- Control Flow: While --
-
     #[test]
     fn integration_while_loop() {
         run(r#"
@@ -934,7 +853,6 @@ mod tests {
 
     #[test]
     fn integration_while_false() {
-        // Body never executes
         run("var x = 0; while (false) { x = 1; }").unwrap();
     }
 
@@ -963,9 +881,6 @@ mod tests {
         "#)
         .unwrap();
     }
-
-    // -- Control Flow: For --
-
     #[test]
     fn integration_for_loop() {
         run(r#"
@@ -1019,9 +934,6 @@ mod tests {
         "#)
         .unwrap();
     }
-
-    // -- Functions --
-
     #[test]
     fn integration_function_declaration() {
         run(r#"
@@ -1100,9 +1012,6 @@ mod tests {
         "#)
         .unwrap();
     }
-
-    // -- Modules --
-
     #[test]
     fn integration_module_declaration() {
         run(r#"
@@ -1128,9 +1037,6 @@ mod tests {
         "#)
         .unwrap();
     }
-
-    // -- Builtin IO Module --
-
     #[test]
     fn integration_io_printn() {
         run(r#"io.printn("hello from test");"#).unwrap();
@@ -1170,9 +1076,6 @@ mod tests {
     fn integration_io_printn_array() {
         run("io.printn([1, 2, 3]);").unwrap();
     }
-
-    // -- Increment / Decrement --
-
     #[test]
     fn integration_prefix_increment() {
         run("var x = 5; ++x;").unwrap();
@@ -1192,9 +1095,6 @@ mod tests {
     fn integration_postfix_decrement() {
         run("var x = 5; x--;").unwrap();
     }
-
-    // -- Block Scoping --
-
     #[test]
     fn integration_block_scoping() {
         run(r#"
@@ -1221,9 +1121,6 @@ mod tests {
         "#)
         .unwrap();
     }
-
-    // -- Number Formats --
-
     #[test]
     fn integration_hex_number() {
         run("var x = 0xFF;").unwrap();
@@ -1253,9 +1150,6 @@ mod tests {
     fn integration_zero() {
         run("var x = 0;").unwrap();
     }
-
-    // -- Complex Programs --
-
     #[test]
     fn integration_fibonacci() {
         run(r#"
@@ -1347,11 +1241,6 @@ mod tests {
         "#)
         .unwrap();
     }
-
-    // -------------------------------------------------------------------------
-    // ERROR HANDLING TESTS
-    // -------------------------------------------------------------------------
-
     #[test]
     fn error_undefined_variable() {
         expect_error("io.printn(xyz);", ErrorKind::Runtime);
@@ -1496,11 +1385,6 @@ mod tests {
     fn error_builtin_wrong_arity() {
         expect_error("io.printn();", ErrorKind::Runtime);
     }
-
-    // -------------------------------------------------------------------------
-    // EDGE CASE TESTS
-    // -------------------------------------------------------------------------
-
     #[test]
     fn edge_empty_program() {
         run("").unwrap();
@@ -1513,7 +1397,6 @@ mod tests {
 
     #[test]
     fn edge_bare_semicolons_error() {
-        // Bare semicolons are not valid statements in Cirq.
         expect_error(";;;", ErrorKind::Parser);
     }
 
@@ -1543,25 +1426,21 @@ mod tests {
 
     #[test]
     fn edge_operator_precedence() {
-        // 2 + 3 * 4 should be 14, not 20
         run("var x = 2 + 3 * 4;").unwrap();
     }
 
     #[test]
     fn edge_right_associative_power() {
-        // 2 ** 3 ** 2 should be 2 ** 9 = 512
         run("var x = 2 ** 3 ** 2;").unwrap();
     }
 
     #[test]
     fn edge_division_by_zero() {
-        // f64 division by zero produces Infinity, not an error
         run("var x = 1 / 0;").unwrap();
     }
 
     #[test]
     fn edge_modulo_zero() {
-        // f64 modulo by zero produces NaN, not an error
         run("var x = 1 % 0;").unwrap();
     }
 
@@ -1739,11 +1618,6 @@ mod tests {
         "#)
         .unwrap();
     }
-
-    // -------------------------------------------------------------------------
-    // BUILTIN MODULE TRAIT TESTS
-    // -------------------------------------------------------------------------
-
     #[test]
     fn builtin_io_module_name() {
         let io = IoModule;
@@ -1780,11 +1654,6 @@ mod tests {
         let module = io.build();
         assert!(module.get_member("nonexistent").is_none());
     }
-
-    // -------------------------------------------------------------------------
-    // PARSER ERROR TESTS
-    // -------------------------------------------------------------------------
-
     #[test]
     fn parser_error_const_without_initializer() {
         expect_error("const x;", ErrorKind::Parser);
@@ -1814,11 +1683,6 @@ mod tests {
     fn parser_error_empty_parens_in_expr() {
         expect_error("var x = ();", ErrorKind::Parser);
     }
-
-    // -------------------------------------------------------------------------
-    // IO FILE OPERATIONS TESTS
-    // -------------------------------------------------------------------------
-
     #[test]
     fn integration_io_write_and_read() {
         let result = run(r#"
@@ -1827,7 +1691,6 @@ mod tests {
             io.printn(content);
         "#);
         assert!(result.is_ok());
-        // Cleanup
         let _ = std::fs::remove_file("/tmp/cirq_test.txt");
     }
 
@@ -1838,14 +1701,8 @@ mod tests {
             ErrorKind::Runtime,
         );
     }
-
-    // -------------------------------------------------------------------------
-    // STRESS / PERFORMANCE EDGE CASES
-    // -------------------------------------------------------------------------
-
     #[test]
     fn stress_deep_recursion() {
-        // Test reasonable recursion depth
         run(r#"
             fun count(n) {
                 if (n <= 0) { return 0; }
@@ -1885,8 +1742,6 @@ mod tests {
     fn stress_array_large() {
         run(r#"
             var arr = [];
-            // Can't dynamically grow arrays without push, but we can
-            // create a fixed-size one
             var arr = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
             for (var i = 0; i < 10; i = i + 1) {
                 arr[i] = i * i;
@@ -1894,12 +1749,6 @@ mod tests {
         "#)
         .unwrap();
     }
-
-    // -------------------------------------------------------------------------
-    // OOP CLASS TESTS
-    // -------------------------------------------------------------------------
-
-    // -- Class: empty class instantiation --
     #[test]
     fn class_empty_class() {
         run(r#"
@@ -1909,7 +1758,6 @@ mod tests {
         .unwrap();
     }
 
-    // -- Class: constructor sets fields via self --
     #[test]
     fn class_init_fields() {
         let result = run(r#"
@@ -1926,7 +1774,6 @@ mod tests {
         assert_eq!(result, Value::Num(7.0));
     }
 
-    // -- Class: instance method with self access --
     #[test]
     fn class_instance_method() {
         let result = run(r#"
@@ -1946,7 +1793,6 @@ mod tests {
         assert_eq!(result, Value::Num(15.0));
     }
 
-    // -- Class: method with parameters --
     #[test]
     fn class_method_with_params() {
         let result = run(r#"
@@ -1965,7 +1811,6 @@ mod tests {
         assert_eq!(result, Value::Num(35.0));
     }
 
-    // -- Class: multiple instances are independent --
     #[test]
     fn class_multiple_instances() {
         let result = run(r#"
@@ -1985,7 +1830,6 @@ mod tests {
         assert_eq!(result, Value::Num(30.0));
     }
 
-    // -- Class: field mutation after construction --
     #[test]
     fn class_field_mutation() {
         let result = run(r#"
@@ -2011,7 +1855,6 @@ mod tests {
         assert_eq!(result, Value::Num(3.0));
     }
 
-    // -- Class: method without init (no constructor) --
     #[test]
     fn class_no_init() {
         let result = run(r#"
@@ -2027,7 +1870,6 @@ mod tests {
         assert_eq!(result, Value::Num(42.0));
     }
 
-    // -- Class: decorative self parameter is stripped --
     #[test]
     fn class_decorative_self_param() {
         let result = run(r#"
@@ -2046,7 +1888,6 @@ mod tests {
         assert_eq!(result, Value::Num(99.0));
     }
 
-    // -- Class: wrong argument count for init --
     #[test]
     fn class_init_wrong_arity() {
         expect_error(
@@ -2063,7 +1904,6 @@ mod tests {
         );
     }
 
-    // -- Class: accessing non-existent field/method --
     #[test]
     fn class_no_such_member() {
         expect_error(
@@ -2080,12 +1920,6 @@ mod tests {
         );
     }
 
-    // -------------------------------------------------------------------------
-    // MATH MODULE TESTS
-    // -------------------------------------------------------------------------
-
-    // -- Constants --
-
     #[test]
     fn math_pi_constant() {
         let result = run("var __result = math.PI;").unwrap();
@@ -2097,9 +1931,6 @@ mod tests {
         let result = run("var __result = math.E;").unwrap();
         assert_eq!(result, Value::Num(std::f64::consts::E));
     }
-
-    // -- Trigonometric --
-
     #[test]
     fn math_sin_zero() {
         let result = run("var __result = math.sin(0);").unwrap();
@@ -2145,9 +1976,6 @@ mod tests {
             panic!("expected num");
         }
     }
-
-    // -- Power & Roots --
-
     #[test]
     fn math_sqrt_basic() {
         let result = run("var __result = math.sqrt(9);").unwrap();
@@ -2165,9 +1993,6 @@ mod tests {
         let result = run("var __result = math.pow(2, 10);").unwrap();
         assert_eq!(result, Value::Num(1024.0));
     }
-
-    // -- Logarithmic & Exponential --
-
     #[test]
     fn math_log_e() {
         let result = run("var __result = math.log(math.E);").unwrap();
@@ -2209,9 +2034,6 @@ mod tests {
             panic!("expected num");
         }
     }
-
-    // -- Min, Max, Clamp --
-
     #[test]
     fn math_min_basic() {
         let result = run("var __result = math.min(3, 7);").unwrap();
@@ -2241,9 +2063,6 @@ mod tests {
         let result = run("var __result = math.clamp(15, 0, 10);").unwrap();
         assert_eq!(result, Value::Num(10.0));
     }
-
-    // -- Sign --
-
     #[test]
     fn math_sign_positive() {
         let result = run("var __result = math.sign(42);").unwrap();
@@ -2261,9 +2080,6 @@ mod tests {
         let result = run("var __result = math.sign(0);").unwrap();
         assert_eq!(result, Value::Num(0.0));
     }
-
-    // -- Random --
-
     #[test]
     fn math_random_in_range() {
         let result = run("var __result = math.random();").unwrap();
@@ -2277,9 +2093,6 @@ mod tests {
             panic!("expected num");
         }
     }
-
-    // -- Error handling --
-
     #[test]
     fn math_sin_type_error() {
         expect_error(
@@ -2297,12 +2110,8 @@ mod tests {
             ErrorKind::Runtime,
         );
     }
-
-    // -- Integration: using constants in expressions --
-
     #[test]
     fn math_circle_area() {
-        // area = PI * r^2, with r = 5
         let result = run("var __result = math.PI * 5 ** 2;").unwrap();
         if let Value::Num(n) = result {
             assert!((n - std::f64::consts::PI * 25.0).abs() < 1e-10);

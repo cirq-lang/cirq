@@ -1,15 +1,3 @@
-//! # VM Module
-//!
-//! Register-based virtual machine for executing Cirq bytecode.
-//! Uses a tight `match`-based dispatch loop for instruction execution.
-//! Globals are stored in an `FxHashMap` for fastest-possible string
-//! key lookups.
-//!
-//! ## Key Design
-//! - Pre-allocated register file per call frame.
-//! - Call stack via `Vec<CallFrame>` with base pointer tracking.
-//! - ARC-based value cloning — cheap refcount bumps, no GC pauses.
-
 use crate::error::{CirqError, CirqResult};
 use crate::opcode::{CompiledFunction, Instruction};
 use crate::value::{Instance, Module, Value};
@@ -17,42 +5,20 @@ use crate::value::{Instance, Module, Value};
 use rustc_hash::FxHashMap;
 use std::cell::RefCell;
 use std::rc::Rc;
-
-// -----------------------------------------------------------------------------
-// CALL FRAME
-// -----------------------------------------------------------------------------
-
-/// A single call frame on the VM's call stack.
 #[derive(Debug)]
 struct CallFrame {
-    /// The function being executed.
     function: Rc<CompiledFunction>,
-    /// Instruction pointer (index into `function.instructions`).
     ip: usize,
-    /// Base register offset in the VM's register file.
     base: usize,
 }
-
-// -----------------------------------------------------------------------------
-// VM STATE
-// -----------------------------------------------------------------------------
-
-/// The Cirq virtual machine. Executes compiled bytecode using a
-/// register-based architecture with a call stack.
 pub struct Vm {
-    /// Global variable storage (name → value).
     globals: FxHashMap<String, Value>,
-    /// Flat register file shared across all frames.
     registers: Vec<Value>,
-    /// Call stack.
     frames: Vec<CallFrame>,
-    /// Builtin method table: `type_name → (method_name → NativeFun value)`.
-    /// Enables unified dispatch for arrays, strings, and other builtin types.
     type_methods: FxHashMap<&'static str, FxHashMap<&'static str, Value>>,
 }
 
 impl Vm {
-    /// Creates a new VM instance with the given builtin modules registered.
     pub fn new() -> Self {
         let mut vm = Self {
             globals: FxHashMap::default(),
@@ -63,17 +29,6 @@ impl Vm {
         vm.register_builtin_methods();
         vm
     }
-
-    // -------------------------------------------------------------------------
-    // BUILTIN TYPE METHODS
-    // -------------------------------------------------------------------------
-    //
-    // All methods go through unified dispatch:
-    //   `val.method(args)` → GetMember (creates BoundMethod) → Call
-    //
-    // For native methods, the receiver is prepended as `args[0]` automatically.
-
-    /// Registers builtin methods for every primitive and collection type.
     fn register_builtin_methods(&mut self) {
         self.register_num_methods();
         self.register_str_methods();
@@ -81,11 +36,7 @@ impl Vm {
         self.register_null_methods();
         self.register_array_methods();
     }
-
-    // -- Number methods -------------------------------------------------------
-
     fn register_num_methods(&mut self) {
-        // n.to_str() → string representation
         self.register_type_method(
             "num",
             "to_str",
@@ -107,7 +58,6 @@ impl Vm {
             },
         );
 
-        // n.to_num() → identity
         self.register_type_method(
             "num",
             "to_num",
@@ -118,7 +68,6 @@ impl Vm {
             },
         );
 
-        // n.abs() → absolute value
         self.register_type_method(
             "num",
             "abs",
@@ -135,7 +84,6 @@ impl Vm {
             },
         );
 
-        // n.floor() → floor
         self.register_type_method(
             "num",
             "floor",
@@ -152,7 +100,6 @@ impl Vm {
             },
         );
 
-        // n.ceil() → ceiling
         self.register_type_method(
             "num",
             "ceil",
@@ -169,7 +116,6 @@ impl Vm {
             },
         );
 
-        // n.round() → nearest integer
         self.register_type_method(
             "num",
             "round",
@@ -186,11 +132,7 @@ impl Vm {
             },
         );
     }
-
-    // -- String methods -------------------------------------------------------
-
     fn register_str_methods(&mut self) {
-        // s.to_str() → identity
         self.register_type_method(
             "str",
             "to_str",
@@ -201,7 +143,6 @@ impl Vm {
             },
         );
 
-        // s.to_num() → parse as number
         self.register_type_method(
             "str",
             "to_num",
@@ -221,7 +162,6 @@ impl Vm {
             },
         );
 
-        // s.len() → character count
         self.register_type_method(
             "str",
             "len",
@@ -238,7 +178,6 @@ impl Vm {
             },
         );
 
-        // s.upper() → uppercase copy
         self.register_type_method(
             "str",
             "upper",
@@ -255,7 +194,6 @@ impl Vm {
             },
         );
 
-        // s.lower() → lowercase copy
         self.register_type_method(
             "str",
             "lower",
@@ -272,7 +210,6 @@ impl Vm {
             },
         );
 
-        // s.trim() → trimmed copy
         self.register_type_method(
             "str",
             "trim",
@@ -289,7 +226,6 @@ impl Vm {
             },
         );
 
-        // s.contains(sub) → bool
         self.register_type_method(
             "str",
             "contains",
@@ -306,7 +242,6 @@ impl Vm {
             },
         );
 
-        // s.split(sep) → array of strings
         self.register_type_method(
             "str",
             "split",
@@ -327,7 +262,6 @@ impl Vm {
             },
         );
 
-        // s.starts_with(prefix) → bool
         self.register_type_method(
             "str",
             "starts_with",
@@ -344,7 +278,6 @@ impl Vm {
             },
         );
 
-        // s.ends_with(suffix) → bool
         self.register_type_method(
             "str",
             "ends_with",
@@ -361,7 +294,6 @@ impl Vm {
             },
         );
 
-        // s.replace(old, new) → new string
         self.register_type_method(
             "str",
             "replace",
@@ -380,7 +312,6 @@ impl Vm {
             },
         );
 
-        // s.slice(start, end) → substring
         self.register_type_method(
             "str",
             "slice",
@@ -406,7 +337,6 @@ impl Vm {
             },
         );
 
-        // s.index_of(sub) → position or -1
         self.register_type_method(
             "str",
             "index_of",
@@ -426,7 +356,6 @@ impl Vm {
             },
         );
 
-        // s.chars() → array of single-character strings
         self.register_type_method(
             "str",
             "chars",
@@ -447,11 +376,7 @@ impl Vm {
             },
         );
     }
-
-    // -- Bool methods ---------------------------------------------------------
-
     fn register_bool_methods(&mut self) {
-        // b.to_str() → "true" / "false"
         self.register_type_method(
             "bool",
             "to_str",
@@ -468,7 +393,6 @@ impl Vm {
             },
         );
 
-        // b.to_num() → 1 / 0
         self.register_type_method(
             "bool",
             "to_num",
@@ -485,11 +409,7 @@ impl Vm {
             },
         );
     }
-
-    // -- Null methods ---------------------------------------------------------
-
     fn register_null_methods(&mut self) {
-        // null.to_str() → "null"
         self.register_type_method(
             "null",
             "to_str",
@@ -500,7 +420,6 @@ impl Vm {
             },
         );
 
-        // null.to_num() → 0
         self.register_type_method(
             "null",
             "to_num",
@@ -511,11 +430,7 @@ impl Vm {
             },
         );
     }
-
-    // -- Array methods --------------------------------------------------------
-
     fn register_array_methods(&mut self) {
-        // arr.push(item) — appends item, returns null
         self.register_type_method(
             "array",
             "push",
@@ -533,7 +448,6 @@ impl Vm {
             },
         );
 
-        // arr.pop() — removes and returns last element
         self.register_type_method(
             "array",
             "pop",
@@ -552,7 +466,6 @@ impl Vm {
             },
         );
 
-        // arr.len() — returns element count
         self.register_type_method(
             "array",
             "len",
@@ -569,7 +482,6 @@ impl Vm {
             },
         );
 
-        // arr.remove(index) — removes element at index, returns it
         self.register_type_method(
             "array",
             "remove",
@@ -599,7 +511,6 @@ impl Vm {
             },
         );
 
-        // arr.insert(index, item) — inserts item at index
         self.register_type_method(
             "array",
             "insert",
@@ -630,7 +541,6 @@ impl Vm {
             },
         );
 
-        // arr.contains(item) → bool
         self.register_type_method(
             "array",
             "contains",
@@ -648,7 +558,6 @@ impl Vm {
             },
         );
 
-        // arr.index_of(item) → position or -1
         self.register_type_method(
             "array",
             "index_of",
@@ -669,7 +578,6 @@ impl Vm {
             },
         );
 
-        // arr.join(sep) → string
         self.register_type_method(
             "array",
             "join",
@@ -688,7 +596,6 @@ impl Vm {
             },
         );
 
-        // arr.reverse() — reverses in place, returns null
         self.register_type_method(
             "array",
             "reverse",
@@ -706,7 +613,6 @@ impl Vm {
             },
         );
 
-        // arr.slice(start, end) → new sub-array
         self.register_type_method(
             "array",
             "slice",
@@ -734,7 +640,6 @@ impl Vm {
             },
         );
 
-        // arr.clear() — removes all elements, returns null
         self.register_type_method(
             "array",
             "clear",
@@ -752,7 +657,6 @@ impl Vm {
             },
         );
 
-        // arr.to_str() → string representation
         self.register_type_method(
             "array",
             "to_str",
@@ -764,11 +668,6 @@ impl Vm {
         );
     }
 
-    /// Registers a builtin method for a given type name.
-    ///
-    /// This enables unified method dispatch: `arr.len()`, `str.len()`,
-    /// etc. go through the same `GetMember` → `BoundMethod` → `Call`
-    /// path as user-defined class methods.
     pub fn register_type_method(
         &mut self,
         type_name: &'static str,
@@ -781,26 +680,18 @@ impl Vm {
             .insert(method_name, method_value);
     }
 
-    /// Registers a module as a global variable.
     pub fn register_module(&mut self, name: &str, module: Module) {
         self.globals
             .insert(name.to_string(), Value::Module(Rc::new(module)));
     }
 
-    /// Returns the value of a global variable, if it exists.
     pub fn get_global(&self, name: &str) -> Option<Value> {
         self.globals.get(name).cloned()
     }
 
-    /// Executes a compiled top-level function (the main script).
-    ///
-    /// # Errors
-    /// Returns a `CirqError` on runtime errors (type mismatches,
-    /// undefined variables, index out of bounds, etc.).
     pub fn execute(&mut self, main_fn: CompiledFunction) -> CirqResult<Value> {
         let main = Rc::new(main_fn);
 
-        // Ensure register file is large enough
         let required = main.local_count as usize + 16;
         self.registers.resize(required.max(256), Value::Null);
 
@@ -812,13 +703,6 @@ impl Vm {
 
         self.run()
     }
-
-    // -------------------------------------------------------------------------
-    // MAIN DISPATCH LOOP
-    // -------------------------------------------------------------------------
-
-    /// The core execution loop. Fetches and dispatches instructions
-    /// until a Return is encountered in the top-level frame.
     fn run(&mut self) -> CirqResult<Value> {
         loop {
             let frame = self.frames.last_mut().unwrap();
@@ -826,7 +710,6 @@ impl Vm {
             frame.ip += 1;
 
             match instr {
-                // -- Load & Move --
                 Instruction::LoadConst { dst, idx } => {
                     let base = self.frames.last().unwrap().base;
                     let val = self.frames.last().unwrap().function.constants[idx as usize].clone();
@@ -850,7 +733,6 @@ impl Vm {
                     self.registers[base + dst as usize] = val;
                 }
 
-                // -- Arithmetic --
                 Instruction::Add { dst, a, b } => {
                     let base = self.frames.last().unwrap().base;
                     let va = &self.registers[base + a as usize];
@@ -899,7 +781,6 @@ impl Vm {
                     }
                 }
 
-                // -- Bitwise --
                 Instruction::BitAnd { dst, a, b } => {
                     self.int_binary_op(dst, a, b, |x, y| x & y, "bitwise AND")?;
                 }
@@ -930,7 +811,6 @@ impl Vm {
                     }
                 }
 
-                // -- Comparison --
                 Instruction::Eq { dst, a, b } => {
                     let base = self.frames.last().unwrap().base;
                     let result =
@@ -956,14 +836,12 @@ impl Vm {
                     self.num_cmp_op(dst, a, b, |x, y| x >= y, ">=")?;
                 }
 
-                // -- Logical --
                 Instruction::Not { dst, src } => {
                     let base = self.frames.last().unwrap().base;
                     let truthy = self.registers[base + src as usize].is_truthy();
                     self.registers[base + dst as usize] = Value::Bool(!truthy);
                 }
 
-                // -- Increment / Decrement --
                 Instruction::Inc { dst } => {
                     let base = self.frames.last().unwrap().base;
                     match &self.registers[base + dst as usize] {
@@ -991,7 +869,6 @@ impl Vm {
                     }
                 }
 
-                // -- Control Flow --
                 Instruction::Jump { offset } => {
                     let frame = self.frames.last_mut().unwrap();
                     frame.ip = (frame.ip as i32 + offset) as usize;
@@ -1011,7 +888,6 @@ impl Vm {
                     }
                 }
 
-                // -- Variables --
                 Instruction::GetGlobal { dst, name_idx } => {
                     let base = self.frames.last().unwrap().base;
                     let name = &self.frames.last().unwrap().function.names[name_idx as usize];
@@ -1044,7 +920,6 @@ impl Vm {
                     self.registers[base + slot as usize] = val;
                 }
 
-                // -- Functions --
                 Instruction::Call {
                     dst,
                     func_reg,
@@ -1063,12 +938,10 @@ impl Vm {
                                 )));
                             }
 
-                            // Set up new frame
                             let new_base = self.registers.len();
                             let frame_size = func.local_count as usize + 16;
                             self.registers.resize(new_base + frame_size, Value::Null);
 
-                            // Copy arguments into new frame's parameter registers
                             for i in 0..arg_count {
                                 self.registers[new_base + i as usize] =
                                     self.registers[base + arg_start as usize + i as usize].clone();
@@ -1079,10 +952,6 @@ impl Vm {
                                 ip: 0,
                                 base: new_base,
                             });
-
-                            // Continue execution in new frame — the return
-                            // instruction will pop back and store the result
-                            // by inspecting the caller's Call instruction.
                         }
                         Value::NativeFun {
                             name, arity, func, ..
@@ -1107,14 +976,12 @@ impl Vm {
                             self.registers[base + dst as usize] = result;
                         }
                         Value::Class(class) => {
-                            // Create a new instance with empty fields.
                             let instance = Rc::new(RefCell::new(Instance {
                                 class: class.clone(),
                                 fields: FxHashMap::default(),
                             }));
                             let instance_val = Value::Instance(instance.clone());
 
-                            // If the class has an `init` method, call it.
                             if let Some(init_method) = class.methods.get("init") {
                                 if arg_count != init_method.param_count {
                                     return Err(self.runtime_error(format!(
@@ -1127,9 +994,7 @@ impl Vm {
                                 let frame_size = init_method.local_count as usize + 16;
                                 self.registers.resize(new_base + frame_size, Value::Null);
 
-                                // Slot 0 = self (the new instance).
                                 self.registers[new_base] = instance_val.clone();
-                                // Remaining slots = user arguments.
                                 for i in 0..arg_count {
                                     self.registers[new_base + 1 + i as usize] = self.registers
                                         [base + arg_start as usize + i as usize]
@@ -1143,70 +1008,64 @@ impl Vm {
                                 });
                             }
 
-                            // The instance is always the result of calling a class.
                             self.registers[base + dst as usize] = instance_val;
                         }
-                        Value::BoundMethod { receiver, method } => {
-                            match *method {
-                                Value::Fun(ref func) => {
-                                    if arg_count != func.param_count {
-                                        return Err(self.runtime_error(format!(
-                                            "method '{}' expects {} arguments, got {}",
-                                            func.name, func.param_count, arg_count
-                                        )));
-                                    }
-
-                                    let new_base = self.registers.len();
-                                    let frame_size = func.local_count as usize + 16;
-                                    self.registers.resize(new_base + frame_size, Value::Null);
-
-                                    // Slot 0 = receiver (self).
-                                    self.registers[new_base] = *receiver;
-                                    // Remaining slots = user arguments.
-                                    for i in 0..arg_count {
-                                        self.registers[new_base + 1 + i as usize] = self.registers
-                                            [base + arg_start as usize + i as usize]
-                                            .clone();
-                                    }
-
-                                    self.frames.push(CallFrame {
-                                        function: func.clone(),
-                                        ip: 0,
-                                        base: new_base,
-                                    });
+                        Value::BoundMethod { receiver, method } => match *method {
+                            Value::Fun(ref func) => {
+                                if arg_count != func.param_count {
+                                    return Err(self.runtime_error(format!(
+                                        "method '{}' expects {} arguments, got {}",
+                                        func.name, func.param_count, arg_count
+                                    )));
                                 }
-                                Value::NativeFun {
-                                    name, arity, func, ..
-                                } => {
-                                    // For native methods, prepend receiver to args.
-                                    if arg_count != arity {
-                                        return Err(self.runtime_error(format!(
-                                            "builtin '{}' expects {} arguments, got {}",
-                                            name, arity, arg_count
-                                        )));
-                                    }
 
-                                    let mut args = Vec::with_capacity(1 + arg_count as usize);
-                                    args.push(*receiver);
-                                    for i in 0..arg_count {
-                                        args.push(
-                                            self.registers[base + arg_start as usize + i as usize]
-                                                .clone(),
-                                        );
-                                    }
+                                let new_base = self.registers.len();
+                                let frame_size = func.local_count as usize + 16;
+                                self.registers.resize(new_base + frame_size, Value::Null);
 
-                                    let result = func(&args).map_err(|e| {
-                                        CirqError::runtime_no_span(format!("{}: {}", name, e))
-                                    })?;
-                                    self.registers[base + dst as usize] = result;
+                                self.registers[new_base] = *receiver;
+                                for i in 0..arg_count {
+                                    self.registers[new_base + 1 + i as usize] = self.registers
+                                        [base + arg_start as usize + i as usize]
+                                        .clone();
                                 }
-                                _ => {
-                                    return Err(self.runtime_error(
-                                        "bound method contains non-callable value".to_string(),
-                                    ));
-                                }
+
+                                self.frames.push(CallFrame {
+                                    function: func.clone(),
+                                    ip: 0,
+                                    base: new_base,
+                                });
                             }
-                        }
+                            Value::NativeFun {
+                                name, arity, func, ..
+                            } => {
+                                if arg_count != arity {
+                                    return Err(self.runtime_error(format!(
+                                        "builtin '{}' expects {} arguments, got {}",
+                                        name, arity, arg_count
+                                    )));
+                                }
+
+                                let mut args = Vec::with_capacity(1 + arg_count as usize);
+                                args.push(*receiver);
+                                for i in 0..arg_count {
+                                    args.push(
+                                        self.registers[base + arg_start as usize + i as usize]
+                                            .clone(),
+                                    );
+                                }
+
+                                let result = func(&args).map_err(|e| {
+                                    CirqError::runtime_no_span(format!("{}: {}", name, e))
+                                })?;
+                                self.registers[base + dst as usize] = result;
+                            }
+                            _ => {
+                                return Err(self.runtime_error(
+                                    "bound method contains non-callable value".to_string(),
+                                ));
+                            }
+                        },
                         other => {
                             return Err(self.runtime_error(format!(
                                 "cannot call value of type '{}'",
@@ -1220,18 +1079,14 @@ impl Vm {
                     let base = self.frames.last().unwrap().base;
                     let return_val = self.registers[base + src as usize].clone();
 
-                    // Pop frame
                     self.frames.pop();
 
                     if self.frames.is_empty() {
-                        // Returning from top-level script
                         return Ok(return_val);
                     }
 
-                    // Truncate register file back to caller's scope
                     self.registers.truncate(base);
 
-                    // Find the Call instruction that invoked us to get dst
                     let caller_frame = self.frames.last().unwrap();
                     let call_instr = caller_frame.function.instructions[caller_frame.ip - 1];
                     if let Instruction::Call { dst, .. } = call_instr {
@@ -1253,7 +1108,6 @@ impl Vm {
                     }
                 }
 
-                // -- Arrays --
                 Instruction::NewArray { dst, start, count } => {
                     let base = self.frames.last().unwrap().base;
                     let mut elements = Vec::with_capacity(count as usize);
@@ -1319,7 +1173,6 @@ impl Vm {
                     }
                 }
 
-                // -- Members (modules, instances, type methods) --
                 Instruction::GetMember { dst, obj, name_idx } => {
                     let base = self.frames.last().unwrap().base;
                     let obj_val = self.registers[base + obj as usize].clone();
@@ -1328,12 +1181,9 @@ impl Vm {
                     match &obj_val {
                         Value::Instance(inst) => {
                             let inst_ref = inst.borrow();
-                            // 1) Check instance fields.
                             if let Some(val) = inst_ref.fields.get(name) {
                                 self.registers[base + dst as usize] = val.clone();
-                            }
-                            // 2) Check class methods → return BoundMethod.
-                            else if let Some(method) = inst_ref.class.methods.get(name) {
+                            } else if let Some(method) = inst_ref.class.methods.get(name) {
                                 self.registers[base + dst as usize] = Value::BoundMethod {
                                     receiver: Box::new(obj_val.clone()),
                                     method: Box::new(Value::Fun(method.clone())),
@@ -1356,7 +1206,6 @@ impl Vm {
                                 )));
                             }
                         },
-                        // 3) Check unified type_methods table for builtins.
                         other => {
                             let type_name = other.type_name();
                             if let Some(methods) = self.type_methods.get(type_name) {
@@ -1382,7 +1231,6 @@ impl Vm {
                     }
                 }
 
-                // -- Set Member (instance field assignment) --
                 Instruction::SetMember { obj, name_idx, val } => {
                     let base = self.frames.last().unwrap().base;
                     let obj_val = self.registers[base + obj as usize].clone();
@@ -1404,7 +1252,6 @@ impl Vm {
                     }
                 }
 
-                // -- String Operations --
                 Instruction::Concat { dst, start, count } => {
                     let base = self.frames.last().unwrap().base;
                     let mut result = String::new();
@@ -1423,12 +1270,6 @@ impl Vm {
             }
         }
     }
-
-    // -------------------------------------------------------------------------
-    // ARITHMETIC HELPERS
-    // -------------------------------------------------------------------------
-
-    /// Performs a binary numeric operation (f64 × f64 → f64).
     #[inline]
     fn num_binary_op(
         &mut self,
@@ -1455,7 +1296,6 @@ impl Vm {
         }
     }
 
-    /// Performs a binary integer operation (i64 × i64 → i64, stored as f64).
     #[inline]
     fn int_binary_op(
         &mut self,
@@ -1483,7 +1323,6 @@ impl Vm {
         }
     }
 
-    /// Performs a numeric comparison operation.
     #[inline]
     fn num_cmp_op(
         &mut self,
@@ -1510,7 +1349,6 @@ impl Vm {
         }
     }
 
-    /// Creates a runtime error with no span information.
     fn runtime_error(&self, message: String) -> CirqError {
         CirqError::runtime_no_span(message)
     }

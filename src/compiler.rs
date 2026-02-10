@@ -1,86 +1,36 @@
-//! # Compiler Module
-//!
-//! Walks the AST and emits register-based bytecode instructions.
-//! Uses a simple linear register allocator: registers are allocated
-//! sequentially and reused after expressions complete.
-//!
-//! ## Key Design
-//! - Single-pass compilation from AST to `CompiledFunction`.
-//! - Constants are deduplicated in the constant pool.
-//! - Scoping via a scope stack tracking local variable slots.
-//! - Functions compile to separate `CompiledFunction` instances.
-
 use crate::ast::*;
 use crate::error::{CirqError, CirqResult, Span};
 use crate::opcode::{CompiledFunction, Instruction};
 use crate::value::Value;
 
 use std::rc::Rc;
-
-// -----------------------------------------------------------------------------
-// LOCAL VARIABLE
-// -----------------------------------------------------------------------------
-
-/// A local variable tracked during compilation.
 #[derive(Debug, Clone)]
 struct Local {
-    /// Variable name.
     name: String,
-    /// Register slot assigned to this local.
     slot: u8,
-    /// Scope depth where this local was declared.
     depth: u32,
-    /// Whether this is a constant binding.
     is_const: bool,
 }
-
-// -----------------------------------------------------------------------------
-// LOOP CONTEXT
-// -----------------------------------------------------------------------------
-
-/// Tracks loop state for break/continue compilation.
 #[derive(Debug, Clone)]
 struct LoopCtx {
-    /// Instruction index where the loop condition starts.
     #[allow(dead_code)]
     start: usize,
-    /// Placeholder indices for break jumps to patch after the loop.
     break_jumps: Vec<usize>,
-    /// Placeholder indices for continue jumps to patch.
-    /// For `while` loops these are patched to `start` (re-check condition).
-    /// For `for` loops these are patched to the update expression.
     continue_jumps: Vec<usize>,
 }
-
-// -----------------------------------------------------------------------------
-// COMPILER STATE
-// -----------------------------------------------------------------------------
-
-/// The Cirq bytecode compiler. Transforms an AST into register-based
-/// bytecode ready for VM execution.
 pub struct Compiler {
-    /// Instructions being emitted.
     instructions: Vec<Instruction>,
-    /// Constant pool (deduplicated).
     constants: Vec<Value>,
-    /// Global name pool for GetGlobal/SetGlobal.
     names: Vec<String>,
-    /// Local variables in the current scope.
     locals: Vec<Local>,
-    /// Current scope depth (0 = global).
     scope_depth: u32,
-    /// Next available register index.
     next_reg: u8,
-    /// Maximum register used (for frame sizing).
     max_reg: u8,
-    /// Current function parameter count.
     param_count: u8,
-    /// Stack of loop contexts for break/continue.
     loops: Vec<LoopCtx>,
 }
 
 impl Compiler {
-    /// Creates a new compiler instance.
     pub fn new() -> Self {
         Self {
             instructions: Vec::new(),
@@ -95,17 +45,11 @@ impl Compiler {
         }
     }
 
-    /// Compiles a list of statements into a top-level `CompiledFunction`.
-    ///
-    /// # Errors
-    /// Returns a `CirqError` if the AST contains constructs that cannot
-    /// be compiled (e.g., break outside loop, too many locals).
     pub fn compile(mut self, stmts: &[Stmt]) -> CirqResult<CompiledFunction> {
         for stmt in stmts {
             self.compile_stmt(stmt)?;
         }
 
-        // Implicit return null at end of script
         let r = self.alloc_reg();
         self.emit(Instruction::LoadNull { dst: r });
         self.emit(Instruction::Return { src: r });
@@ -119,12 +63,6 @@ impl Compiler {
             param_count: 0,
         })
     }
-
-    // -------------------------------------------------------------------------
-    // STATEMENT COMPILATION
-    // -------------------------------------------------------------------------
-
-    /// Compiles a single statement.
     fn compile_stmt(&mut self, stmt: &Stmt) -> CirqResult<()> {
         match stmt {
             Stmt::VarDecl {
@@ -194,7 +132,6 @@ impl Compiler {
         }
     }
 
-    /// Compiles a variable/constant declaration.
     fn compile_var_decl(
         &mut self,
         name: &str,
@@ -215,12 +152,10 @@ impl Compiler {
         }
 
         if self.scope_depth == 0 {
-            // Global variable
             let name_idx = self.add_name(name);
             self.emit(Instruction::SetGlobal { name_idx, src: reg });
             self.free_reg(reg);
         } else {
-            // Local variable — register is the slot
             self.locals.push(Local {
                 name: name.to_string(),
                 slot: reg,
@@ -232,7 +167,6 @@ impl Compiler {
         Ok(())
     }
 
-    /// Compiles a function declaration.
     fn compile_fun_decl(
         &mut self,
         name: &str,
@@ -240,12 +174,10 @@ impl Compiler {
         body: &[Stmt],
         _span: Span,
     ) -> CirqResult<()> {
-        // Compile the function body in a fresh compiler
         let mut fun_compiler = Compiler::new();
         fun_compiler.param_count = params.len() as u8;
         fun_compiler.scope_depth = 1;
 
-        // Allocate registers for parameters
         for param in params {
             let reg = fun_compiler.alloc_reg();
             fun_compiler.locals.push(Local {
@@ -256,12 +188,10 @@ impl Compiler {
             });
         }
 
-        // Compile function body
         for stmt in body {
             fun_compiler.compile_stmt(stmt)?;
         }
 
-        // Implicit return null
         let r = fun_compiler.alloc_reg();
         fun_compiler.emit(Instruction::LoadNull { dst: r });
         fun_compiler.emit(Instruction::Return { src: r });
@@ -275,7 +205,6 @@ impl Compiler {
             param_count: params.len() as u8,
         };
 
-        // Store the compiled function as a constant and assign to name
         let fun_val = Value::Fun(Rc::new(compiled));
         let const_idx = self.add_constant(fun_val);
         let dst = self.alloc_reg();
@@ -300,9 +229,7 @@ impl Compiler {
         Ok(())
     }
 
-    /// Compiles a module declaration.
     fn compile_mod_decl(&mut self, name: &str, body: &[Stmt], _span: Span) -> CirqResult<()> {
-        // Compile all function declarations within the module
         let mut members: Vec<(String, Value)> = Vec::new();
 
         for stmt in body {
@@ -376,11 +303,6 @@ impl Compiler {
         Ok(())
     }
 
-    /// Compiles a class declaration.
-    ///
-    /// Each method is compiled in a fresh `Compiler` with `self` injected
-    /// at register slot 0. The `param_count` reflects user-visible params
-    /// only (not counting `self`).
     fn compile_class_decl(
         &mut self,
         name: &str,
@@ -392,7 +314,6 @@ impl Compiler {
         for method in methods {
             let mut mc = Compiler::new();
             mc.scope_depth = 1;
-            // `self` occupies slot 0 — always present, not counted in param_count.
             let self_reg = mc.alloc_reg();
             mc.locals.push(Local {
                 name: "self".to_string(),
@@ -401,7 +322,6 @@ impl Compiler {
                 is_const: false,
             });
 
-            // Allocate registers for user-declared parameters.
             for param in &method.params {
                 let reg = mc.alloc_reg();
                 mc.locals.push(Local {
@@ -416,7 +336,6 @@ impl Compiler {
                 mc.compile_stmt(stmt)?;
             }
 
-            // Implicit return: `init` returns `self`, others return `null`.
             let r = mc.alloc_reg();
             if method.name == "init" {
                 mc.emit(Instruction::GetLocal { dst: r, slot: 0 });
@@ -431,7 +350,6 @@ impl Compiler {
                 constants: mc.constants,
                 names: mc.names,
                 local_count: mc.max_reg,
-                // param_count = user params only (self is implicit).
                 param_count: method.params.len() as u8,
             };
 
@@ -465,12 +383,6 @@ impl Compiler {
 
         Ok(())
     }
-
-    // -------------------------------------------------------------------------
-    // CONTROL FLOW COMPILATION
-    // -------------------------------------------------------------------------
-
-    /// Compiles an if/else statement.
     fn compile_if(
         &mut self,
         condition: &Expr,
@@ -495,7 +407,6 @@ impl Compiler {
         Ok(())
     }
 
-    /// Compiles a while loop.
     fn compile_while(&mut self, condition: &Expr, body: &Stmt) -> CirqResult<()> {
         let loop_start = self.instructions.len();
         self.loops.push(LoopCtx {
@@ -510,20 +421,17 @@ impl Compiler {
 
         self.compile_stmt(body)?;
 
-        // Patch continue jumps → back to condition
         let loop_ctx_ref = self.loops.last().unwrap();
         let cont_indices: Vec<usize> = loop_ctx_ref.continue_jumps.clone();
         for cont in cont_indices {
             self.patch_jump_to(cont, loop_start);
         }
 
-        // Jump back to condition
         let offset = loop_start as i32 - self.instructions.len() as i32 - 1;
         self.emit(Instruction::Jump { offset });
 
         self.patch_jump_false(exit_jump, cond_reg);
 
-        // Patch break jumps → after loop
         let loop_ctx = self.loops.pop().unwrap();
         for brk in loop_ctx.break_jumps {
             self.patch_jump(brk);
@@ -532,7 +440,6 @@ impl Compiler {
         Ok(())
     }
 
-    /// Compiles a for loop.
     fn compile_for(
         &mut self,
         init: Option<&Stmt>,
@@ -564,8 +471,6 @@ impl Compiler {
 
         self.compile_stmt(body)?;
 
-        // Patch continue jumps → update expression (not condition).
-        // This ensures `continue` in a for-loop doesn't skip the update.
         let update_start = self.instructions.len();
         let cont_indices: Vec<usize> = self.loops.last().unwrap().continue_jumps.clone();
         for cont in cont_indices {
@@ -593,7 +498,6 @@ impl Compiler {
         Ok(())
     }
 
-    /// Compiles a break statement.
     fn compile_break(&mut self, span: Span) -> CirqResult<()> {
         if self.loops.is_empty() {
             return Err(CirqError::compiler("'break' outside of loop", span));
@@ -603,9 +507,6 @@ impl Compiler {
         Ok(())
     }
 
-    /// Compiles a continue statement.
-    /// Emits a placeholder jump that gets patched by the enclosing loop
-    /// to jump to the correct target (condition for while, update for for).
     fn compile_continue(&mut self, span: Span) -> CirqResult<()> {
         if self.loops.is_empty() {
             return Err(CirqError::compiler("'continue' outside of loop", span));
@@ -614,12 +515,6 @@ impl Compiler {
         self.loops.last_mut().unwrap().continue_jumps.push(j);
         Ok(())
     }
-
-    // -------------------------------------------------------------------------
-    // EXPRESSION COMPILATION
-    // -------------------------------------------------------------------------
-
-    /// Compiles an expression, returning the register holding the result.
     fn compile_expr(&mut self, expr: &Expr) -> CirqResult<u8> {
         match expr {
             Expr::Number { value, .. } => {
@@ -683,7 +578,6 @@ impl Compiler {
         }
     }
 
-    /// Compiles string interpolation into Concat.
     fn compile_interpolation(&mut self, parts: &[InterpolationPart]) -> CirqResult<u8> {
         let start = self.next_reg;
 
@@ -696,8 +590,6 @@ impl Compiler {
                 }
                 InterpolationPart::Expr(expr) => {
                     let r = self.compile_expr(expr)?;
-                    // Convert to string in-place so only one register is
-                    // consumed in the sequential Concat range.
                     self.emit(Instruction::ToString { dst: r, src: r });
                 }
             }
@@ -710,10 +602,7 @@ impl Compiler {
         Ok(dst)
     }
 
-    /// Compiles a variable reference.
     fn compile_ident(&mut self, name: &str, _span: Span) -> CirqResult<u8> {
-        // Search locals from innermost scope outward.
-        // Extract slot before calling alloc_reg to avoid overlapping borrows.
         let local_slot = self
             .locals
             .iter()
@@ -727,16 +616,13 @@ impl Compiler {
             return Ok(dst);
         }
 
-        // Global
         let dst = self.alloc_reg();
         let name_idx = self.add_name(name);
         self.emit(Instruction::GetGlobal { dst, name_idx });
         Ok(dst)
     }
 
-    /// Compiles a binary operation.
     fn compile_binary(&mut self, left: &Expr, op: BinOp, right: &Expr) -> CirqResult<u8> {
-        // Short-circuit for && and ||
         match op {
             BinOp::And => return self.compile_and(left, right),
             BinOp::Or => return self.compile_or(left, right),
@@ -773,7 +659,6 @@ impl Compiler {
         Ok(dst)
     }
 
-    /// Compiles short-circuit `&&`.
     fn compile_and(&mut self, left: &Expr, right: &Expr) -> CirqResult<u8> {
         let a = self.compile_expr(left)?;
         let jump = self.emit_placeholder();
@@ -785,7 +670,6 @@ impl Compiler {
         Ok(a)
     }
 
-    /// Compiles short-circuit `||`.
     fn compile_or(&mut self, left: &Expr, right: &Expr) -> CirqResult<u8> {
         let a = self.compile_expr(left)?;
         let jump = self.instructions.len();
@@ -799,7 +683,6 @@ impl Compiler {
         Ok(a)
     }
 
-    /// Compiles a unary operation.
     fn compile_unary(&mut self, op: UnaryOp, operand: &Expr) -> CirqResult<u8> {
         let src = self.compile_expr(operand)?;
         let dst = src;
@@ -814,13 +697,11 @@ impl Compiler {
         Ok(dst)
     }
 
-    /// Compiles an assignment expression.
     fn compile_assign(&mut self, target: &Expr, value: &Expr, span: Span) -> CirqResult<u8> {
         let val_reg = self.compile_expr(value)?;
 
         match target {
             Expr::Ident { name, .. } => {
-                // Check for const reassignment
                 for local in self.locals.iter().rev() {
                     if local.name == *name {
                         if local.is_const {
@@ -871,7 +752,6 @@ impl Compiler {
         Ok(val_reg)
     }
 
-    /// Compiles a compound assignment (`+=`, `-=`, etc.).
     fn compile_compound_assign(
         &mut self,
         target: &Expr,
@@ -879,7 +759,6 @@ impl Compiler {
         value: &Expr,
         span: Span,
     ) -> CirqResult<u8> {
-        // Load current value, compute, store back
         let current = self.compile_expr(target)?;
         let rhs = self.compile_expr(value)?;
         let dst = current;
@@ -951,9 +830,7 @@ impl Compiler {
         self.emit(instr);
         self.free_reg(rhs);
 
-        // Store result back
         self.compile_assign(target, &Expr::Null { span }, span)?;
-        // Actually we need to store the register—let's directly store
         match target {
             Expr::Ident { name, .. } => {
                 for local in self.locals.iter().rev() {
@@ -991,17 +868,13 @@ impl Compiler {
         Ok(dst)
     }
 
-    /// Compiles a function call.
     fn compile_call(&mut self, callee: &Expr, args: &[Expr], _span: Span) -> CirqResult<u8> {
         let func_reg = self.compile_expr(callee)?;
         let arg_start = self.next_reg;
 
         for arg in args {
             let r = self.compile_expr(arg)?;
-            // Ensure argument is in the expected sequential register
-            if r != self.next_reg - 1 {
-                // Already there from compile_expr's alloc_reg
-            }
+            if r != self.next_reg - 1 {}
         }
 
         let arg_count = args.len() as u8;
@@ -1013,13 +886,11 @@ impl Compiler {
             arg_count,
         });
 
-        // Free argument registers
         self.free_reg_to(arg_start);
 
         Ok(dst)
     }
 
-    /// Compiles array index access.
     fn compile_index(&mut self, object: &Expr, index: &Expr) -> CirqResult<u8> {
         let obj = self.compile_expr(object)?;
         let idx = self.compile_expr(index)?;
@@ -1029,7 +900,6 @@ impl Compiler {
         Ok(dst)
     }
 
-    /// Compiles member access (e.g., `io.print`).
     fn compile_member_access(
         &mut self,
         object: &Expr,
@@ -1043,7 +913,6 @@ impl Compiler {
         Ok(dst)
     }
 
-    /// Compiles an array literal.
     fn compile_array(&mut self, elements: &[Expr]) -> CirqResult<u8> {
         let start = self.next_reg;
 
@@ -1059,19 +928,16 @@ impl Compiler {
         Ok(dst)
     }
 
-    /// Compiles prefix `++x` or `--x`.
     fn compile_pre_inc_dec(&mut self, op: IncDecOp, operand: &Expr, span: Span) -> CirqResult<u8> {
         let reg = self.compile_expr(operand)?;
         match op {
             IncDecOp::Inc => self.emit(Instruction::Inc { dst: reg }),
             IncDecOp::Dec => self.emit(Instruction::Dec { dst: reg }),
         }
-        // Store back
         self.store_back(operand, reg, span)?;
         Ok(reg)
     }
 
-    /// Compiles postfix `x++` or `x--`.
     fn compile_post_inc_dec(&mut self, op: IncDecOp, operand: &Expr, span: Span) -> CirqResult<u8> {
         let reg = self.compile_expr(operand)?;
         let copy = self.alloc_reg();
@@ -1088,7 +954,6 @@ impl Compiler {
         Ok(copy)
     }
 
-    /// Stores a register value back to the target (used by ++/--).
     fn store_back(&mut self, target: &Expr, reg: u8, _span: Span) -> CirqResult<()> {
         match target {
             Expr::Ident { name, .. } => {
@@ -1118,12 +983,6 @@ impl Compiler {
         }
         Ok(())
     }
-
-    // -------------------------------------------------------------------------
-    // REGISTER ALLOCATION
-    // -------------------------------------------------------------------------
-
-    /// Allocates the next available register.
     #[inline]
     fn alloc_reg(&mut self) -> u8 {
         let reg = self.next_reg;
@@ -1134,7 +993,6 @@ impl Compiler {
         reg
     }
 
-    /// Frees a single register (must be the most recently allocated).
     #[inline]
     fn free_reg(&mut self, _reg: u8) {
         if self.next_reg > 0 {
@@ -1142,22 +1000,14 @@ impl Compiler {
         }
     }
 
-    /// Frees all registers from `target` onwards.
     #[inline]
     fn free_reg_to(&mut self, target: u8) {
         self.next_reg = target;
     }
-
-    // -------------------------------------------------------------------------
-    // SCOPE MANAGEMENT
-    // -------------------------------------------------------------------------
-
-    /// Enters a new scope level.
     fn begin_scope(&mut self) {
         self.scope_depth += 1;
     }
 
-    /// Exits the current scope, removing its locals.
     fn end_scope(&mut self) {
         self.scope_depth -= 1;
         while let Some(local) = self.locals.last() {
@@ -1170,21 +1020,13 @@ impl Compiler {
             }
         }
     }
-
-    // -------------------------------------------------------------------------
-    // CONSTANT & NAME POOLS
-    // -------------------------------------------------------------------------
-
-    /// Adds a constant to the pool, returning its index.
     fn add_constant(&mut self, value: Value) -> u16 {
         let idx = self.constants.len() as u16;
         self.constants.push(value);
         idx
     }
 
-    /// Adds a name to the name pool, returning its index.
     fn add_name(&mut self, name: &str) -> u16 {
-        // Check for existing
         for (i, n) in self.names.iter().enumerate() {
             if n == name {
                 return i as u16;
@@ -1194,39 +1036,27 @@ impl Compiler {
         self.names.push(name.to_string());
         idx
     }
-
-    // -------------------------------------------------------------------------
-    // INSTRUCTION EMISSION
-    // -------------------------------------------------------------------------
-
-    /// Emits an instruction, returning its index.
     #[inline]
     fn emit(&mut self, instr: Instruction) {
         self.instructions.push(instr);
     }
 
-    /// Emits a placeholder Jump instruction, returning its index for patching.
     fn emit_placeholder(&mut self) -> usize {
         let idx = self.instructions.len();
         self.instructions.push(Instruction::Jump { offset: 0 });
         idx
     }
 
-    /// Patches a jump placeholder to jump to the current instruction.
     fn patch_jump(&mut self, placeholder: usize) {
         let offset = self.instructions.len() as i32 - placeholder as i32 - 1;
         self.instructions[placeholder] = Instruction::Jump { offset };
     }
 
-    /// Patches a jump placeholder to jump to a specific instruction index.
-    /// Unlike `patch_jump`, this allows jumping to any target, not just the
-    /// current position. Used for continue-to-update patching in for-loops.
     fn patch_jump_to(&mut self, placeholder: usize, target: usize) {
         let offset = target as i32 - placeholder as i32 - 1;
         self.instructions[placeholder] = Instruction::Jump { offset };
     }
 
-    /// Patches a placeholder to a JumpIfFalse to the current instruction.
     fn patch_jump_false(&mut self, placeholder: usize, src: u8) {
         let offset = self.instructions.len() as i32 - placeholder as i32 - 1;
         self.instructions[placeholder] = Instruction::JumpIfFalse { src, offset };

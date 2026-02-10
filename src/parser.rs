@@ -1,24 +1,6 @@
-//! # Parser Module
-//!
-//! Recursive descent parser with Pratt-style precedence climbing for
-//! expressions. Consumes a flat token stream from the lexer and produces
-//! an AST for the compiler.
-//!
-//! ## Key Features
-//! - Pratt parser for correct operator precedence with minimal code.
-//! - Zero-copy token references where possible.
-//! - Comprehensive error recovery with span-accurate diagnostics.
-
 use crate::ast::*;
 use crate::error::{CirqError, CirqResult, Span};
 use crate::token::{Token, TokenKind};
-
-// -----------------------------------------------------------------------------
-// PRECEDENCE LEVELS
-// -----------------------------------------------------------------------------
-
-/// Operator precedence levels, ordered from lowest to highest.
-/// Used by the Pratt parser to determine binding strength.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(u8)]
 enum Precedence {
@@ -38,29 +20,16 @@ enum Precedence {
     Unary = 13,     // ! - + ~ ++ --
     Call = 14,      // . () []
 }
-
-// -----------------------------------------------------------------------------
-// PARSER STATE
-// -----------------------------------------------------------------------------
-
-/// The Cirq parser. Turns tokens into an abstract syntax tree.
 pub struct Parser {
-    /// Token stream produced by the lexer.
     tokens: Vec<Token>,
-    /// Current position in the token stream.
     current: usize,
 }
 
 impl Parser {
-    /// Creates a new parser for the given token stream.
     pub fn new(tokens: Vec<Token>) -> Self {
         Self { tokens, current: 0 }
     }
 
-    /// Parses the entire token stream into a list of statements.
-    ///
-    /// # Errors
-    /// Returns a `CirqError` on any syntax error.
     pub fn parse(&mut self) -> CirqResult<Vec<Stmt>> {
         let mut stmts = Vec::new();
         while !self.is_at_end() {
@@ -68,12 +37,6 @@ impl Parser {
         }
         Ok(stmts)
     }
-
-    // -------------------------------------------------------------------------
-    // DECLARATION PARSING
-    // -------------------------------------------------------------------------
-
-    /// Parses a declaration or falls through to a statement.
     fn declaration(&mut self) -> CirqResult<Stmt> {
         match self.peek_kind() {
             TokenKind::Var => self.var_declaration(),
@@ -85,7 +48,6 @@ impl Parser {
         }
     }
 
-    /// Parses `var name = expr;` or `var name;`
     fn var_declaration(&mut self) -> CirqResult<Stmt> {
         let span = self.advance().span; // consume 'var'
         let name = self.expect_ident("expected variable name")?;
@@ -104,7 +66,6 @@ impl Parser {
         })
     }
 
-    /// Parses `const name = expr;`
     fn const_declaration(&mut self) -> CirqResult<Stmt> {
         let span = self.advance().span; // consume 'const'
         let name = self.expect_ident("expected constant name")?;
@@ -114,7 +75,6 @@ impl Parser {
         Ok(Stmt::ConstDecl { name, value, span })
     }
 
-    /// Parses `fun name(params...) { body }`
     fn fun_declaration(&mut self) -> CirqResult<Stmt> {
         let span = self.advance().span; // consume 'fun'
         let name = self.expect_ident("expected function name")?;
@@ -128,7 +88,6 @@ impl Parser {
         })
     }
 
-    /// Parses `mod name { declarations... }`
     fn mod_declaration(&mut self) -> CirqResult<Stmt> {
         let span = self.advance().span; // consume 'mod'
         let name = self.expect_ident("expected module name")?;
@@ -143,11 +102,6 @@ impl Parser {
         Ok(Stmt::ModDecl { name, body, span })
     }
 
-    /// Parses `class Name { methods... }`
-    ///
-    /// Each method is `name(params) { body }`. If the first parameter is
-    /// `self`, it is silently stripped — `self` is always available
-    /// implicitly at slot 0 inside every method.
     fn class_declaration(&mut self) -> CirqResult<Stmt> {
         let span = self.advance().span; // consume 'class'
         let name = self.expect_ident("expected class name")?;
@@ -159,7 +113,6 @@ impl Parser {
             let method_name = self.expect_ident("expected method name")?;
             let mut params = self.parse_param_list()?;
 
-            // Strip `self` if it appears as the first parameter (decorative).
             if params.first().map(|s| s.as_str()) == Some("self") {
                 params.remove(0);
             }
@@ -180,12 +133,6 @@ impl Parser {
             span,
         })
     }
-
-    // -------------------------------------------------------------------------
-    // STATEMENT PARSING
-    // -------------------------------------------------------------------------
-
-    /// Parses a statement (non-declaration).
     fn statement(&mut self) -> CirqResult<Stmt> {
         match self.peek_kind() {
             TokenKind::LBrace => self.block_statement(),
@@ -199,14 +146,12 @@ impl Parser {
         }
     }
 
-    /// Parses `{ statements... }`
     fn block_statement(&mut self) -> CirqResult<Stmt> {
         let span = self.peek().span;
         let stmts = self.parse_block_body()?;
         Ok(Stmt::Block { stmts, span })
     }
 
-    /// Parses `if (cond) { ... } else { ... }`
     fn if_statement(&mut self) -> CirqResult<Stmt> {
         let span = self.advance().span; // consume 'if'
         self.expect_kind(&TokenKind::LParen, "expected '(' after 'if'")?;
@@ -228,7 +173,6 @@ impl Parser {
         })
     }
 
-    /// Parses `while (cond) { ... }`
     fn while_statement(&mut self) -> CirqResult<Stmt> {
         let span = self.advance().span; // consume 'while'
         self.expect_kind(&TokenKind::LParen, "expected '(' after 'while'")?;
@@ -242,12 +186,10 @@ impl Parser {
         })
     }
 
-    /// Parses `for (init; cond; update) { ... }`
     fn for_statement(&mut self) -> CirqResult<Stmt> {
         let span = self.advance().span; // consume 'for'
         self.expect_kind(&TokenKind::LParen, "expected '(' after 'for'")?;
 
-        // Initializer
         let init = if self.match_kind(&TokenKind::Semicolon) {
             None
         } else if self.check_kind(&TokenKind::Var) {
@@ -260,7 +202,6 @@ impl Parser {
             Some(Box::new(Stmt::ExprStmt { expr, span: s }))
         };
 
-        // Condition
         let condition = if self.check_kind(&TokenKind::Semicolon) {
             None
         } else {
@@ -268,7 +209,6 @@ impl Parser {
         };
         self.expect_semicolon()?;
 
-        // Update
         let update = if self.check_kind(&TokenKind::RParen) {
             None
         } else {
@@ -286,7 +226,6 @@ impl Parser {
         })
     }
 
-    /// Parses `return expr;` or `return;`
     fn return_statement(&mut self) -> CirqResult<Stmt> {
         let span = self.advance().span; // consume 'return'
         let value = if self.check_kind(&TokenKind::Semicolon) {
@@ -298,44 +237,31 @@ impl Parser {
         Ok(Stmt::Return { value, span })
     }
 
-    /// Parses `break;`
     fn break_statement(&mut self) -> CirqResult<Stmt> {
         let span = self.advance().span;
         self.expect_semicolon()?;
         Ok(Stmt::Break { span })
     }
 
-    /// Parses `continue;`
     fn continue_statement(&mut self) -> CirqResult<Stmt> {
         let span = self.advance().span;
         self.expect_semicolon()?;
         Ok(Stmt::Continue { span })
     }
 
-    /// Parses an expression statement: `expr;`
     fn expression_statement(&mut self) -> CirqResult<Stmt> {
         let expr = self.expression()?;
         let span = expr.span();
         self.expect_semicolon()?;
         Ok(Stmt::ExprStmt { expr, span })
     }
-
-    // -------------------------------------------------------------------------
-    // EXPRESSION PARSING — Pratt / Precedence Climbing
-    // -------------------------------------------------------------------------
-
-    /// Parses an expression at the lowest precedence.
     fn expression(&mut self) -> CirqResult<Expr> {
         self.parse_precedence(Precedence::Assignment)
     }
 
-    /// Core Pratt parser: parses expressions with the given minimum
-    /// precedence, handling left-to-right and right-to-left associativity.
     fn parse_precedence(&mut self, min_prec: Precedence) -> CirqResult<Expr> {
-        // Parse prefix / primary
         let mut left = self.parse_prefix()?;
 
-        // Parse infix and postfix operators
         loop {
             if self.is_at_end() {
                 break;
@@ -352,11 +278,9 @@ impl Parser {
         Ok(left)
     }
 
-    /// Parses a prefix expression (unary, literals, grouping, identifiers).
     fn parse_prefix(&mut self) -> CirqResult<Expr> {
         let token = self.peek().clone();
         match &token.kind {
-            // Unary operators
             TokenKind::Minus => {
                 self.advance();
                 let operand = self.parse_precedence(Precedence::Unary)?;
@@ -394,7 +318,6 @@ impl Parser {
                 })
             }
 
-            // Pre-increment / pre-decrement
             TokenKind::PlusPlus => {
                 self.advance();
                 let operand = self.parse_precedence(Precedence::Unary)?;
@@ -414,7 +337,6 @@ impl Parser {
                 })
             }
 
-            // Literals
             TokenKind::Number(_) => {
                 let t = self.advance();
                 if let TokenKind::Number(v) = t.kind {
@@ -456,7 +378,6 @@ impl Parser {
                 Ok(Expr::Null { span: t.span })
             }
 
-            // Identifier
             TokenKind::Ident(_) => {
                 let t = self.advance();
                 if let TokenKind::Ident(name) = t.kind {
@@ -466,7 +387,6 @@ impl Parser {
                 }
             }
 
-            // Parenthesized expression
             TokenKind::LParen => {
                 self.advance();
                 let expr = self.expression()?;
@@ -474,13 +394,10 @@ impl Parser {
                 Ok(expr)
             }
 
-            // Array literal
             TokenKind::LBracket => self.parse_array_literal(),
 
-            // String interpolation
             TokenKind::StringStart(_) => self.parse_string_interpolation(),
 
-            // Self reference inside a method
             TokenKind::SelfKw => {
                 let t = self.advance();
                 Ok(Expr::SelfRef { span: t.span })
@@ -493,11 +410,9 @@ impl Parser {
         }
     }
 
-    /// Parses an infix expression (binary op, assignment, call, index, member).
     fn parse_infix(&mut self, left: Expr, prec: Precedence) -> CirqResult<Expr> {
         let token = self.peek().clone();
         match &token.kind {
-            // Assignment
             TokenKind::Eq => {
                 self.advance();
                 let value = self.parse_precedence(Precedence::Assignment)?;
@@ -508,7 +423,6 @@ impl Parser {
                 })
             }
 
-            // Compound assignment
             TokenKind::PlusEq
             | TokenKind::MinusEq
             | TokenKind::StarEq
@@ -531,7 +445,6 @@ impl Parser {
                 })
             }
 
-            // Postfix increment/decrement
             TokenKind::PlusPlus => {
                 self.advance();
                 Ok(Expr::PostIncDec {
@@ -549,7 +462,6 @@ impl Parser {
                 })
             }
 
-            // Binary operators
             TokenKind::Plus
             | TokenKind::Minus
             | TokenKind::Star
@@ -572,7 +484,6 @@ impl Parser {
                 let t = self.advance();
                 let op = token_to_binop(&t.kind);
 
-                // Right-associative for power
                 let next_prec = if t.kind == TokenKind::Power {
                     prec
                 } else {
@@ -588,7 +499,6 @@ impl Parser {
                 })
             }
 
-            // Function call
             TokenKind::LParen => {
                 self.advance();
                 let args = self.parse_arg_list()?;
@@ -600,7 +510,6 @@ impl Parser {
                 })
             }
 
-            // Array index
             TokenKind::LBracket => {
                 self.advance();
                 let index = self.expression()?;
@@ -613,7 +522,6 @@ impl Parser {
                 })
             }
 
-            // Member access
             TokenKind::Dot => {
                 self.advance();
                 let member = self.expect_ident("expected member name after '.'")?;
@@ -629,7 +537,6 @@ impl Parser {
         }
     }
 
-    /// Returns the precedence of the current token as an infix operator.
     fn get_infix_precedence(&self) -> Precedence {
         match self.peek_kind() {
             TokenKind::Eq
@@ -662,12 +569,6 @@ impl Parser {
             _ => Precedence::None,
         }
     }
-
-    // -------------------------------------------------------------------------
-    // COMPOUND CONSTRUCTS
-    // -------------------------------------------------------------------------
-
-    /// Parses an array literal: `[elem1, elem2, ...]` with multiline support.
     fn parse_array_literal(&mut self) -> CirqResult<Expr> {
         let span = self.advance().span; // consume '['
         let mut elements = Vec::new();
@@ -686,8 +587,6 @@ impl Parser {
         Ok(Expr::Array { elements, span })
     }
 
-    /// Parses a string interpolation sequence from `StringStart` through
-    /// expression tokens and `StringPart`/`StringEnd` tokens.
     fn parse_string_interpolation(&mut self) -> CirqResult<Expr> {
         let t = self.advance();
         let span = t.span;
@@ -703,13 +602,11 @@ impl Parser {
         }
 
         loop {
-            // Parse the expression between interpolation markers
             if !self.check_kind(&TokenKind::StringPart(String::new())) && !self.check_string_end() {
                 let expr = self.expression()?;
                 parts.push(InterpolationPart::Expr(expr));
             }
 
-            // Check for StringPart (middle) or StringEnd (final)
             let next = self.peek().clone();
             match &next.kind {
                 TokenKind::StringPart(_) => {
@@ -741,7 +638,6 @@ impl Parser {
         Ok(Expr::Interpolation { parts, span })
     }
 
-    /// Parses a parameter list: `(param1, param2, ...)`
     fn parse_param_list(&mut self) -> CirqResult<Vec<String>> {
         self.expect_kind(&TokenKind::LParen, "expected '(' for parameter list")?;
         let mut params = Vec::new();
@@ -757,10 +653,6 @@ impl Parser {
         Ok(params)
     }
 
-    /// Expects a parameter name — either an identifier or `self`.
-    ///
-    /// `self` is lexed as `SelfKw`, not `Ident`, so the standard
-    /// `expect_ident` rejects it. This helper accepts both.
     fn expect_param_name(&mut self) -> CirqResult<String> {
         let token = self.peek().clone();
         match &token.kind {
@@ -780,7 +672,6 @@ impl Parser {
         }
     }
 
-    /// Parses a call argument list: `(arg1, arg2, ...)`
     fn parse_arg_list(&mut self) -> CirqResult<Vec<Expr>> {
         let mut args = Vec::new();
 
@@ -795,7 +686,6 @@ impl Parser {
         Ok(args)
     }
 
-    /// Parses the body of a block: `{ stmts... }`
     fn parse_block_body(&mut self) -> CirqResult<Vec<Stmt>> {
         self.expect_kind(&TokenKind::LBrace, "expected '{'")?;
         let mut stmts = Vec::new();
@@ -805,24 +695,16 @@ impl Parser {
         self.expect_kind(&TokenKind::RBrace, "expected '}'")?;
         Ok(stmts)
     }
-
-    // -------------------------------------------------------------------------
-    // TOKEN HELPERS
-    // -------------------------------------------------------------------------
-
-    /// Returns a reference to the current token without consuming it.
     #[inline]
     fn peek(&self) -> &Token {
         &self.tokens[self.current]
     }
 
-    /// Returns the kind of the current token.
     #[inline]
     fn peek_kind(&self) -> &TokenKind {
         &self.tokens[self.current].kind
     }
 
-    /// Consumes and returns the current token.
     #[inline]
     fn advance(&mut self) -> Token {
         let token = self.tokens[self.current].clone();
@@ -832,23 +714,19 @@ impl Parser {
         token
     }
 
-    /// Returns `true` if the current token is `Eof`.
     #[inline]
     fn is_at_end(&self) -> bool {
         matches!(self.tokens[self.current].kind, TokenKind::Eof)
     }
 
-    /// Returns `true` if the current token matches the given kind.
     fn check_kind(&self, kind: &TokenKind) -> bool {
         std::mem::discriminant(self.peek_kind()) == std::mem::discriminant(kind)
     }
 
-    /// Checks if current token is a `StringEnd` variant.
     fn check_string_end(&self) -> bool {
         matches!(self.peek_kind(), TokenKind::StringEnd(_))
     }
 
-    /// Consumes the current token if it matches `kind`, returning `true`.
     fn match_kind(&mut self, kind: &TokenKind) -> bool {
         if self.check_kind(kind) {
             self.advance();
@@ -858,7 +736,6 @@ impl Parser {
         }
     }
 
-    /// Expects the current token to match `kind`, returning an error otherwise.
     fn expect_kind(&mut self, kind: &TokenKind, msg: &str) -> CirqResult<Token> {
         if self.check_kind(kind) {
             Ok(self.advance())
@@ -867,7 +744,6 @@ impl Parser {
         }
     }
 
-    /// Expects an identifier token and returns the name string.
     fn expect_ident(&mut self, msg: &str) -> CirqResult<String> {
         let token = self.peek().clone();
         if let TokenKind::Ident(_) = &token.kind {
@@ -882,17 +758,10 @@ impl Parser {
         }
     }
 
-    /// Expects a semicolon token.
     fn expect_semicolon(&mut self) -> CirqResult<Token> {
         self.expect_kind(&TokenKind::Semicolon, "expected ';'")
     }
 }
-
-// -----------------------------------------------------------------------------
-// OPERATOR CONVERSION HELPERS
-// -----------------------------------------------------------------------------
-
-/// Converts a binary operator token kind to its AST `BinOp`.
 fn token_to_binop(kind: &TokenKind) -> BinOp {
     match kind {
         TokenKind::Plus => BinOp::Add,
@@ -918,7 +787,6 @@ fn token_to_binop(kind: &TokenKind) -> BinOp {
     }
 }
 
-/// Converts a compound assignment token kind to its underlying `BinOp`.
 fn compound_to_binop(kind: &TokenKind) -> BinOp {
     match kind {
         TokenKind::PlusEq => BinOp::Add,
@@ -935,13 +803,7 @@ fn compound_to_binop(kind: &TokenKind) -> BinOp {
         _ => unreachable!("not a compound assignment: {:?}", kind),
     }
 }
-
-// -----------------------------------------------------------------------------
-// PRECEDENCE HELPER
-// -----------------------------------------------------------------------------
-
 impl Precedence {
-    /// Converts a `u8` to a `Precedence`, clamping to `Call` if out of range.
     fn from_u8(v: u8) -> Self {
         match v {
             0 => Precedence::None,
@@ -962,13 +824,7 @@ impl Precedence {
         }
     }
 }
-
-// -----------------------------------------------------------------------------
-// AST SPAN HELPER
-// -----------------------------------------------------------------------------
-
 impl Expr {
-    /// Returns the source span of this expression node.
     pub fn span(&self) -> Span {
         match self {
             Expr::Number { span, .. }
