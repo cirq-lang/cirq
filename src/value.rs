@@ -62,6 +62,7 @@ pub enum Value {
         receiver: Box<Value>,
         method: Box<Value>,
     },
+    FileHandle(Rc<RefCell<Option<std::fs::File>>>),
 }
 
 impl Value {
@@ -90,6 +91,7 @@ impl Value {
             Value::Class(_) => "class",
             Value::Instance(_) => "instance",
             Value::BoundMethod { .. } => "bound_method",
+            Value::FileHandle(_) => "file",
         }
     }
 
@@ -124,6 +126,7 @@ impl Value {
                 format!("<{} instance>", inst.borrow().class.name)
             }
             Value::BoundMethod { .. } => "<bound method>".to_string(),
+            Value::FileHandle(_) => "<file>".to_string(),
         }
     }
 }
@@ -147,6 +150,7 @@ impl PartialEq for Value {
             (Value::Bool(a), Value::Bool(b)) => a == b,
             (Value::Null, Value::Null) => true,
             (Value::Str(a), Value::Str(b)) => a == b,
+            (Value::FileHandle(a), Value::FileHandle(b)) => Rc::ptr_eq(a, b),
             _ => false,
         }
     }

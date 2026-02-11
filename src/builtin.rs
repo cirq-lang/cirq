@@ -27,10 +27,6 @@ pub trait BuiltinModule {
         Vec::new()
     }
 
-    fn classes(&self) -> Vec<NativeClassDef> {
-        Vec::new()
-    }
-
     fn build(&self) -> Module {
         let mut members: Vec<(String, Value)> = self
             .constants()
@@ -44,38 +40,39 @@ pub trait BuiltinModule {
             }),
         );
 
-        for class_def in self.classes() {
-            let mut methods: FxHashMap<String, Value> = FxHashMap::default();
-
-            if let Some((arity, func)) = class_def.constructor {
-                methods.insert(
-                    "init".to_string(),
-                    Value::NativeFun {
-                        name: "init",
-                        arity,
-                        func,
-                    },
-                );
-            }
-
-            for (name, arity, func) in class_def.methods {
-                methods.insert(name.to_string(), Value::NativeFun { name, arity, func });
-            }
-
-            let class = Class {
-                name: class_def.name.to_string(),
-                methods,
-                parent: None,
-            };
-            members.push((class_def.name.to_string(), Value::Class(Rc::new(class))));
-        }
-
         Module {
             name: self.name().to_string(),
             members,
         }
     }
 }
+fn file_class() -> Rc<Class> {
+    let mut methods: FxHashMap<String, Value> = FxHashMap::default();
+    for (name, arity, func) in [
+        ("read", 0u8, file_read as NativeFn),
+        ("readline", 0, file_readline as NativeFn),
+        ("readlines", 0, file_readlines as NativeFn),
+        ("write", 1, file_write as NativeFn),
+        ("writeln", 1, file_writeln as NativeFn),
+        ("close", 0, file_close as NativeFn),
+        ("is_open", 0, file_is_open as NativeFn),
+    ] {
+        methods.insert(name.to_string(), Value::NativeFun { name, arity, func });
+    }
+    Rc::new(Class {
+        name: "File".to_string(),
+        methods,
+        parent: None,
+    })
+}
+
+fn extract_handle(inst: &Instance) -> Result<Rc<RefCell<Option<std::fs::File>>>, String> {
+    match inst.fields.get("_handle") {
+        Some(Value::FileHandle(h)) => Ok(h.clone()),
+        _ => Err("invalid file handle".to_string()),
+    }
+}
+
 pub struct IoModule;
 
 impl BuiltinModule for IoModule {
@@ -90,13 +87,15 @@ impl BuiltinModule for IoModule {
             ("eprint", 1, io_eprint as NativeFn),
             ("eprintn", 1, io_eprintn as NativeFn),
             ("input", 1, io_input as NativeFn),
-            ("read", 1, io_read as NativeFn),
-            ("readline", 1, io_readline as NativeFn),
-            ("readlines", 1, io_readlines as NativeFn),
-            ("write", 2, io_write as NativeFn),
+            ("open", 2, io_open as NativeFn),
         ]
     }
+
+    fn constants(&self) -> Vec<(&'static str, Value)> {
+        vec![("File", Value::Class(file_class()))]
+    }
 }
+
 fn io_print(args: &[Value]) -> Result<Value, String> {
     let text = args[0].to_display_string();
     print!("{}", text);
@@ -143,54 +142,147 @@ fn io_input(args: &[Value]) -> Result<Value, String> {
     Ok(Value::Str(Rc::new(line)))
 }
 
-fn io_read(args: &[Value]) -> Result<Value, String> {
+fn io_open(args: &[Value]) -> Result<Value, String> {
     let path = args[0].to_display_string();
-    let mut file = std::fs::File::open(&path).map_err(|e| format!("{}: {}", path, e))?;
-    let mut contents = String::new();
-    file.read_to_string(&mut contents)
-        .map_err(|e| format!("{}: {}", path, e))?;
-    Ok(Value::Str(Rc::new(contents)))
-}
+    let mode = args[1].to_display_string();
 
-fn io_readline(args: &[Value]) -> Result<Value, String> {
-    let path = args[0].to_display_string();
-    let file = std::fs::File::open(&path).map_err(|e| format!("{}: {}", path, e))?;
-    let reader = io::BufReader::new(file);
-    let mut line = String::new();
-    reader
-        .take(1024 * 1024) // safety limit: 1MB for a single line
-        .read_line(&mut line)
-        .map_err(|e| format!("{}: {}", path, e))?;
-
-    if line.ends_with('\n') {
-        line.pop();
-        if line.ends_with('\r') {
-            line.pop();
+    let file = match mode.as_str() {
+        "r" => std::fs::File::open(&path).map_err(|e| format!("{}: {}", path, e))?,
+        "w" => std::fs::File::create(&path).map_err(|e| format!("{}: {}", path, e))?,
+        "a" => std::fs::OpenOptions::new()
+            .append(true)
+            .create(true)
+            .open(&path)
+            .map_err(|e| format!("{}: {}", path, e))?,
+        "rw" => std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .open(&path)
+            .map_err(|e| format!("{}: {}", path, e))?,
+        _ => {
+            return Err(format!(
+                "invalid file mode: '{}' (use r, w, a, or rw)",
+                mode
+            ));
         }
-    }
+    };
 
-    Ok(Value::Str(Rc::new(line)))
+    let handle = Rc::new(RefCell::new(Some(file)));
+    let mut fields: FxHashMap<String, Value> = FxHashMap::default();
+    fields.insert("path".to_string(), Value::Str(Rc::new(path)));
+    fields.insert("mode".to_string(), Value::Str(Rc::new(mode)));
+    fields.insert("_handle".to_string(), Value::FileHandle(handle));
+
+    let instance = Instance {
+        class: file_class(),
+        fields,
+    };
+    Ok(Value::Instance(Rc::new(RefCell::new(instance))))
 }
 
-fn io_readlines(args: &[Value]) -> Result<Value, String> {
-    let path = args[0].to_display_string();
-    let file = std::fs::File::open(&path).map_err(|e| format!("{}: {}", path, e))?;
-    let reader = io::BufReader::new(file);
-    let mut lines = Vec::new();
-
-    for line_result in reader.lines() {
-        let line = line_result.map_err(|e| format!("{}: {}", path, e))?;
-        lines.push(Value::Str(Rc::new(line)));
+fn file_read(args: &[Value]) -> Result<Value, String> {
+    if let Value::Instance(inst) = &args[0] {
+        let inst_ref = inst.borrow();
+        let handle = extract_handle(&inst_ref)?;
+        let mut h = handle.borrow_mut();
+        let file = h.as_mut().ok_or("file is closed")?;
+        let mut contents = String::new();
+        file.read_to_string(&mut contents)
+            .map_err(|e| e.to_string())?;
+        Ok(Value::Str(Rc::new(contents)))
+    } else {
+        Err("read requires a File instance".to_string())
     }
-
-    Ok(Value::Array(Rc::new(std::cell::RefCell::new(lines))))
 }
 
-fn io_write(args: &[Value]) -> Result<Value, String> {
-    let path = args[0].to_display_string();
-    let content = args[1].to_display_string();
-    std::fs::write(&path, &content).map_err(|e| format!("{}: {}", path, e))?;
-    Ok(Value::Null)
+fn file_readline(args: &[Value]) -> Result<Value, String> {
+    if let Value::Instance(inst) = &args[0] {
+        let inst_ref = inst.borrow();
+        let handle = extract_handle(&inst_ref)?;
+        let mut h = handle.borrow_mut();
+        let file = h.as_mut().ok_or("file is closed")?;
+        let mut reader = io::BufReader::new(file);
+        let mut line = String::new();
+        reader.read_line(&mut line).map_err(|e| e.to_string())?;
+
+        if line.ends_with('\n') {
+            line.pop();
+            if line.ends_with('\r') {
+                line.pop();
+            }
+        }
+        Ok(Value::Str(Rc::new(line)))
+    } else {
+        Err("readline requires a File instance".to_string())
+    }
+}
+
+fn file_readlines(args: &[Value]) -> Result<Value, String> {
+    if let Value::Instance(inst) = &args[0] {
+        let inst_ref = inst.borrow();
+        let handle = extract_handle(&inst_ref)?;
+        let mut h = handle.borrow_mut();
+        let file = h.as_mut().ok_or("file is closed")?;
+        let reader = io::BufReader::new(file);
+        let mut lines = Vec::new();
+        for line_result in reader.lines() {
+            let line = line_result.map_err(|e| e.to_string())?;
+            lines.push(Value::Str(Rc::new(line)));
+        }
+        Ok(Value::Array(Rc::new(RefCell::new(lines))))
+    } else {
+        Err("readlines requires a File instance".to_string())
+    }
+}
+
+fn file_write(args: &[Value]) -> Result<Value, String> {
+    if let Value::Instance(inst) = &args[0] {
+        let inst_ref = inst.borrow();
+        let handle = extract_handle(&inst_ref)?;
+        let mut h = handle.borrow_mut();
+        let file = h.as_mut().ok_or("file is closed")?;
+        let data = args[1].to_display_string();
+        file.write_all(data.as_bytes()).map_err(|e| e.to_string())?;
+        Ok(Value::Null)
+    } else {
+        Err("write requires a File instance".to_string())
+    }
+}
+
+fn file_writeln(args: &[Value]) -> Result<Value, String> {
+    if let Value::Instance(inst) = &args[0] {
+        let inst_ref = inst.borrow();
+        let handle = extract_handle(&inst_ref)?;
+        let mut h = handle.borrow_mut();
+        let file = h.as_mut().ok_or("file is closed")?;
+        let data = args[1].to_display_string();
+        writeln!(file, "{}", data).map_err(|e| e.to_string())?;
+        Ok(Value::Null)
+    } else {
+        Err("writeln requires a File instance".to_string())
+    }
+}
+
+fn file_close(args: &[Value]) -> Result<Value, String> {
+    if let Value::Instance(inst) = &args[0] {
+        let inst_ref = inst.borrow();
+        let handle = extract_handle(&inst_ref)?;
+        let _ = handle.borrow_mut().take();
+        Ok(Value::Null)
+    } else {
+        Err("close requires a File instance".to_string())
+    }
+}
+
+fn file_is_open(args: &[Value]) -> Result<Value, String> {
+    if let Value::Instance(inst) = &args[0] {
+        let inst_ref = inst.borrow();
+        let handle = extract_handle(&inst_ref)?;
+        Ok(Value::Bool(handle.borrow().is_some()))
+    } else {
+        Err("is_open requires a File instance".to_string())
+    }
 }
 pub struct MathModule;
 
@@ -336,6 +428,60 @@ fn math_sign(args: &[Value]) -> Result<Value, String> {
     Ok(Value::Num(result))
 }
 
+fn datetime_class() -> Rc<Class> {
+    let mut methods: FxHashMap<String, Value> = FxHashMap::default();
+    methods.insert(
+        "init".to_string(),
+        Value::NativeFun {
+            name: "init",
+            arity: 1,
+            func: dt_init,
+        },
+    );
+    for (name, arity, func) in [
+        ("to_iso", 0u8, dt_to_iso as NativeFn),
+        ("to_date", 0, dt_to_date as NativeFn),
+        ("to_clock", 0, dt_to_clock as NativeFn),
+        ("add_days", 1, dt_add_days as NativeFn),
+        ("add_hours", 1, dt_add_hours as NativeFn),
+        ("add_secs", 1, dt_add_secs as NativeFn),
+        ("diff", 1, dt_diff as NativeFn),
+        ("is_leap", 0, dt_is_leap as NativeFn),
+        ("days_in_month", 0, dt_days_in_month as NativeFn),
+    ] {
+        methods.insert(name.to_string(), Value::NativeFun { name, arity, func });
+    }
+    Rc::new(Class {
+        name: "DateTime".to_string(),
+        methods,
+        parent: None,
+    })
+}
+
+fn populate_datetime_fields(fields: &mut FxHashMap<String, Value>, ts: f64) {
+    use chrono::{DateTime, Datelike, TimeZone, Timelike, Utc};
+
+    let secs = ts as i64;
+    let nanos = ((ts - secs as f64) * 1_000_000_000.0) as u32;
+    let dt: DateTime<Utc> = Utc
+        .timestamp_opt(secs, nanos)
+        .single()
+        .unwrap_or_else(|| Utc.timestamp_opt(0, 0).unwrap());
+
+    fields.insert("timestamp".to_string(), Value::Num(ts));
+    fields.insert("year".to_string(), Value::Num(dt.year() as f64));
+    fields.insert("month".to_string(), Value::Num(dt.month() as f64));
+    fields.insert("day".to_string(), Value::Num(dt.day() as f64));
+    fields.insert("hour".to_string(), Value::Num(dt.hour() as f64));
+    fields.insert("minute".to_string(), Value::Num(dt.minute() as f64));
+    fields.insert("second".to_string(), Value::Num(dt.second() as f64));
+    fields.insert(
+        "weekday".to_string(),
+        Value::Num(dt.weekday().num_days_from_monday() as f64),
+    );
+    fields.insert("yearday".to_string(), Value::Num(dt.ordinal() as f64));
+}
+
 pub struct TimeModule;
 
 impl BuiltinModule for TimeModule {
@@ -356,81 +502,17 @@ impl BuiltinModule for TimeModule {
         ]
     }
 
-    fn classes(&self) -> Vec<NativeClassDef> {
-        vec![NativeClassDef {
-            name: "DateTime",
-            constructor: Some((1, dt_init as NativeFn)),
-            methods: vec![
-                ("to_iso", 0, dt_to_iso as NativeFn),
-                ("to_date", 0, dt_to_date as NativeFn),
-                ("to_clock", 0, dt_to_clock as NativeFn),
-                ("add_days", 1, dt_add_days as NativeFn),
-                ("add_hours", 1, dt_add_hours as NativeFn),
-                ("add_secs", 1, dt_add_secs as NativeFn),
-                ("diff", 1, dt_diff as NativeFn),
-                ("is_leap", 0, dt_is_leap as NativeFn),
-                ("days_in_month", 0, dt_days_in_month as NativeFn),
-            ],
-        }]
+    fn constants(&self) -> Vec<(&'static str, Value)> {
+        vec![("DateTime", Value::Class(datetime_class()))]
     }
 }
 
 fn build_datetime_instance(ts: f64) -> Value {
-    use chrono::{DateTime, Datelike, TimeZone, Timelike, Utc};
-
-    let secs = ts as i64;
-    let nanos = ((ts - secs as f64) * 1_000_000_000.0) as u32;
-    let dt: DateTime<Utc> = Utc
-        .timestamp_opt(secs, nanos)
-        .single()
-        .unwrap_or_else(|| Utc.timestamp_opt(0, 0).unwrap());
-
-    let class = Class {
-        name: "DateTime".to_string(),
-        methods: {
-            let mut m: FxHashMap<String, Value> = FxHashMap::default();
-            m.insert(
-                "init".to_string(),
-                Value::NativeFun {
-                    name: "init",
-                    arity: 1,
-                    func: dt_init,
-                },
-            );
-            for (name, arity, func) in [
-                ("to_iso", 0u8, dt_to_iso as NativeFn),
-                ("to_date", 0, dt_to_date as NativeFn),
-                ("to_clock", 0, dt_to_clock as NativeFn),
-                ("add_days", 1, dt_add_days as NativeFn),
-                ("add_hours", 1, dt_add_hours as NativeFn),
-                ("add_secs", 1, dt_add_secs as NativeFn),
-                ("diff", 1, dt_diff as NativeFn),
-                ("is_leap", 0, dt_is_leap as NativeFn),
-                ("days_in_month", 0, dt_days_in_month as NativeFn),
-            ] {
-                m.insert(name.to_string(), Value::NativeFun { name, arity, func });
-            }
-            m
-        },
-        parent: None,
-    };
-
     let mut fields: FxHashMap<String, Value> = FxHashMap::default();
-    fields.insert("timestamp".to_string(), Value::Num(ts));
-    fields.insert("year".to_string(), Value::Num(dt.year() as f64));
-    fields.insert("month".to_string(), Value::Num(dt.month() as f64));
-    fields.insert("day".to_string(), Value::Num(dt.day() as f64));
-    fields.insert("hour".to_string(), Value::Num(dt.hour() as f64));
-    fields.insert("minute".to_string(), Value::Num(dt.minute() as f64));
-    fields.insert("second".to_string(), Value::Num(dt.second() as f64));
-    fields.insert(
-        "weekday".to_string(),
-        Value::Num(dt.weekday().num_days_from_monday() as f64),
-    );
-    fields.insert("yearday".to_string(), Value::Num(dt.ordinal() as f64));
+    populate_datetime_fields(&mut fields, ts);
 
     let instance = Instance {
-        class: Rc::new(class),
+        class: datetime_class(),
         fields,
     };
     Value::Instance(Rc::new(RefCell::new(instance)))
