@@ -2126,7 +2126,6 @@ mod tests {
         }
     }
 
-    // --- Class Inheritance Tests ---
     #[test]
     fn inheritance_basic() {
         let result = run(r#"
@@ -2223,7 +2222,6 @@ mod tests {
         );
     }
 
-    // --- Throw Tests ---
     #[test]
     fn throw_string_uncaught() {
         expect_error(r#"throw "something went wrong";"#, ErrorKind::Error);
@@ -2234,7 +2232,6 @@ mod tests {
         expect_error("throw 42;", ErrorKind::Error);
     }
 
-    // --- Try/Catch Statement Tests ---
     #[test]
     fn try_catch_statement_basic() {
         let result = run(r#"
@@ -2314,7 +2311,6 @@ mod tests {
         assert_eq!(result, Value::Str(Rc::new("rethrown".to_string())));
     }
 
-    // --- Null Coalescing Tests ---
     #[test]
     fn null_coalesce_null_fallback() {
         let result = run("var __result = null ?? 42;").unwrap();
@@ -2351,7 +2347,6 @@ mod tests {
         assert_eq!(result, Value::Num(7.0));
     }
 
-    // --- Lexer Tests for New Tokens ---
     #[test]
     fn lexer_colon_token() {
         let kinds = tokenize(":").unwrap();
