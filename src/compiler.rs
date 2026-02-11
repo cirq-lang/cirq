@@ -20,6 +20,8 @@ struct LoopCtx {
 }
 pub struct Compiler {
     instructions: Vec<Instruction>,
+    spans: Vec<Span>,
+    current_span: Span,
     constants: Vec<Value>,
     names: Vec<String>,
     locals: Vec<Local>,
@@ -34,6 +36,12 @@ impl Compiler {
     pub fn new() -> Self {
         Self {
             instructions: Vec::new(),
+            spans: Vec::new(),
+            current_span: Span {
+                line: 1,
+                col: 1,
+                len: 0,
+            },
             constants: Vec::new(),
             names: Vec::new(),
             locals: Vec::new(),
@@ -57,6 +65,7 @@ impl Compiler {
         Ok(CompiledFunction {
             name: "<main>".to_string(),
             instructions: self.instructions,
+            spans: self.spans,
             constants: self.constants,
             names: self.names,
             local_count: self.max_reg,
@@ -64,6 +73,7 @@ impl Compiler {
         })
     }
     fn compile_stmt(&mut self, stmt: &Stmt) -> CirqResult<()> {
+        self.current_span = stmt.get_span();
         match stmt {
             Stmt::VarDecl {
                 name,
@@ -199,6 +209,7 @@ impl Compiler {
         let compiled = CompiledFunction {
             name: name.to_string(),
             instructions: fun_compiler.instructions,
+            spans: fun_compiler.spans,
             constants: fun_compiler.constants,
             names: fun_compiler.names,
             local_count: fun_compiler.max_reg,
@@ -265,6 +276,7 @@ impl Compiler {
                 let compiled = CompiledFunction {
                     name: format!("{}.{}", name, fname),
                     instructions: fun_compiler.instructions,
+                    spans: fun_compiler.spans,
                     constants: fun_compiler.constants,
                     names: fun_compiler.names,
                     local_count: fun_compiler.max_reg,
@@ -347,6 +359,7 @@ impl Compiler {
             let compiled = CompiledFunction {
                 name: format!("{}.{}", name, method.name),
                 instructions: mc.instructions,
+                spans: mc.spans,
                 constants: mc.constants,
                 names: mc.names,
                 local_count: mc.max_reg,
@@ -500,7 +513,7 @@ impl Compiler {
 
     fn compile_break(&mut self, span: Span) -> CirqResult<()> {
         if self.loops.is_empty() {
-            return Err(CirqError::compiler("'break' outside of loop", span));
+            return Err(CirqError::syntax("'break' outside of loop", span));
         }
         let j = self.emit_placeholder();
         self.loops.last_mut().unwrap().break_jumps.push(j);
@@ -509,13 +522,14 @@ impl Compiler {
 
     fn compile_continue(&mut self, span: Span) -> CirqResult<()> {
         if self.loops.is_empty() {
-            return Err(CirqError::compiler("'continue' outside of loop", span));
+            return Err(CirqError::syntax("'continue' outside of loop", span));
         }
         let j = self.emit_placeholder();
         self.loops.last_mut().unwrap().continue_jumps.push(j);
         Ok(())
     }
     fn compile_expr(&mut self, expr: &Expr) -> CirqResult<u8> {
+        self.current_span = expr.get_span();
         match expr {
             Expr::Number { value, .. } => {
                 let dst = self.alloc_reg();
@@ -705,9 +719,9 @@ impl Compiler {
                 for local in self.locals.iter().rev() {
                     if local.name == *name {
                         if local.is_const {
-                            return Err(CirqError::compiler(
+                            return Err(CirqError::type_error(
                                 format!("cannot assign to constant '{}'", name),
-                                span,
+                                Some(span),
                             ));
                         }
                         self.emit(Instruction::SetLocal {
@@ -745,7 +759,7 @@ impl Compiler {
                 self.free_reg(obj);
             }
             _ => {
-                return Err(CirqError::compiler("invalid assignment target", span));
+                return Err(CirqError::syntax("invalid assignment target", span));
             }
         }
 
@@ -820,7 +834,7 @@ impl Compiler {
                 b: rhs,
             },
             _ => {
-                return Err(CirqError::compiler(
+                return Err(CirqError::syntax(
                     "invalid compound assignment operator",
                     span,
                 ));
@@ -1039,11 +1053,13 @@ impl Compiler {
     #[inline]
     fn emit(&mut self, instr: Instruction) {
         self.instructions.push(instr);
+        self.spans.push(self.current_span);
     }
 
     fn emit_placeholder(&mut self) -> usize {
         let idx = self.instructions.len();
         self.instructions.push(Instruction::Jump { offset: 0 });
+        self.spans.push(self.current_span);
         idx
     }
 

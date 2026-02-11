@@ -151,6 +151,50 @@ pub enum Expr {
         span: Span,
     },
 }
+
+impl Expr {
+    pub fn get_span(&self) -> Span {
+        match self {
+            Expr::Number { span, .. }
+            | Expr::Str { span, .. }
+            | Expr::Interpolation { span, .. }
+            | Expr::Bool { span, .. }
+            | Expr::Null { span }
+            | Expr::Ident { span, .. }
+            | Expr::Binary { span, .. }
+            | Expr::Unary { span, .. }
+            | Expr::Assign { span, .. }
+            | Expr::CompoundAssign { span, .. }
+            | Expr::Call { span, .. }
+            | Expr::Index { span, .. }
+            | Expr::MemberAccess { span, .. }
+            | Expr::Array { span, .. }
+            | Expr::PreIncDec { span, .. }
+            | Expr::PostIncDec { span, .. }
+            | Expr::SelfRef { span } => *span,
+        }
+    }
+}
+
+impl Stmt {
+    pub fn get_span(&self) -> Span {
+        match self {
+            Stmt::VarDecl { span, .. }
+            | Stmt::ConstDecl { span, .. }
+            | Stmt::FunDecl { span, .. }
+            | Stmt::ModDecl { span, .. }
+            | Stmt::ExprStmt { span, .. }
+            | Stmt::Block { span, .. }
+            | Stmt::Return { span, .. }
+            | Stmt::If { span, .. }
+            | Stmt::While { span, .. }
+            | Stmt::For { span, .. }
+            | Stmt::Break { span }
+            | Stmt::Continue { span }
+            | Stmt::ClassDecl { span, .. } => *span,
+        }
+    }
+}
 #[derive(Debug, Clone)]
 pub enum InterpolationPart {
     Literal(String),

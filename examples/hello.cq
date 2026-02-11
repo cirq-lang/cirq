@@ -1,1 +1,1 @@
-io.printn("hello world \(args)");
+io.printn("hello world");

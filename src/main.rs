@@ -34,7 +34,7 @@ fn main() {
     builtin::set_script_args(script_args);
 
     if let Err(e) = run(&source) {
-        eprintln!("{}", e);
+        eprintln!("{}", cirq::error::format_error(&e, &source, path));
         process::exit(1);
     }
 }

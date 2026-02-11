@@ -1243,52 +1243,52 @@ mod tests {
     }
     #[test]
     fn error_undefined_variable() {
-        expect_error("io.printn(xyz);", ErrorKind::Runtime);
+        expect_error("io.printn(xyz);", ErrorKind::ReferenceError);
     }
 
     #[test]
     fn error_type_mismatch_add() {
-        expect_error("var x = 1 + true;", ErrorKind::Runtime);
+        expect_error("var x = 1 + true;", ErrorKind::TypeError);
     }
 
     #[test]
     fn error_type_mismatch_subtract() {
-        expect_error(r#"var x = "hello" - 1;"#, ErrorKind::Runtime);
+        expect_error(r#"var x = "hello" - 1;"#, ErrorKind::TypeError);
     }
 
     #[test]
     fn error_type_mismatch_multiply() {
-        expect_error(r#"var x = "hello" * 2;"#, ErrorKind::Runtime);
+        expect_error(r#"var x = "hello" * 2;"#, ErrorKind::TypeError);
     }
 
     #[test]
     fn error_type_mismatch_compare() {
-        expect_error(r#"var x = "hello" < 2;"#, ErrorKind::Runtime);
+        expect_error(r#"var x = "hello" < 2;"#, ErrorKind::TypeError);
     }
 
     #[test]
     fn error_type_mismatch_negate() {
-        expect_error(r#"var x = -"hello";"#, ErrorKind::Runtime);
+        expect_error(r#"var x = -"hello";"#, ErrorKind::TypeError);
     }
 
     #[test]
     fn error_type_mismatch_bitwise() {
-        expect_error(r#"var x = "hello" & 1;"#, ErrorKind::Runtime);
+        expect_error(r#"var x = "hello" & 1;"#, ErrorKind::TypeError);
     }
 
     #[test]
     fn error_type_mismatch_bitwise_not() {
-        expect_error(r#"var x = ~"hello";"#, ErrorKind::Runtime);
+        expect_error(r#"var x = ~"hello";"#, ErrorKind::TypeError);
     }
 
     #[test]
     fn error_type_mismatch_increment() {
-        expect_error(r#"var x = "hello"; ++x;"#, ErrorKind::Runtime);
+        expect_error(r#"var x = "hello"; ++x;"#, ErrorKind::TypeError);
     }
 
     #[test]
     fn error_call_non_function() {
-        expect_error("var x = 42; x();", ErrorKind::Runtime);
+        expect_error("var x = 42; x();", ErrorKind::TypeError);
     }
 
     #[test]
@@ -1298,53 +1298,56 @@ mod tests {
             fun foo(a) { return a; }
             foo(1, 2);
         "#,
-            ErrorKind::Runtime,
+            ErrorKind::TypeError,
         );
     }
 
     #[test]
     fn error_index_out_of_bounds() {
-        expect_error("var arr = [1, 2, 3]; var x = arr[10];", ErrorKind::Runtime);
+        expect_error(
+            "var arr = [1, 2, 3]; var x = arr[10];",
+            ErrorKind::RangeError,
+        );
     }
 
     #[test]
     fn error_index_non_array() {
-        expect_error("var x = 42; var y = x[0];", ErrorKind::Runtime);
+        expect_error("var x = 42; var y = x[0];", ErrorKind::TypeError);
     }
 
     #[test]
     fn error_member_access_non_module() {
-        expect_error("var x = 42; x.foo;", ErrorKind::Runtime);
+        expect_error("var x = 42; x.foo;", ErrorKind::ReferenceError);
     }
 
     #[test]
     fn error_undefined_module_member() {
-        expect_error("io.nonexistent();", ErrorKind::Runtime);
+        expect_error("io.nonexistent();", ErrorKind::ReferenceError);
     }
 
     #[test]
     fn error_missing_semicolon() {
-        expect_error("var x = 1", ErrorKind::Parser);
+        expect_error("var x = 1", ErrorKind::SyntaxError);
     }
 
     #[test]
     fn error_unexpected_token() {
-        expect_error("var = 1;", ErrorKind::Parser);
+        expect_error("var = 1;", ErrorKind::SyntaxError);
     }
 
     #[test]
     fn error_unterminated_string() {
-        expect_error(r#"var s = "hello"#, ErrorKind::Lexer);
+        expect_error(r#"var s = "hello"#, ErrorKind::SyntaxError);
     }
 
     #[test]
     fn error_break_outside_loop() {
-        expect_error("break;", ErrorKind::Compiler);
+        expect_error("break;", ErrorKind::SyntaxError);
     }
 
     #[test]
     fn error_continue_outside_loop() {
-        expect_error("continue;", ErrorKind::Compiler);
+        expect_error("continue;", ErrorKind::SyntaxError);
     }
 
     #[test]
@@ -1357,33 +1360,36 @@ mod tests {
             }
             test();
         "#,
-            ErrorKind::Compiler,
+            ErrorKind::TypeError,
         );
     }
 
     #[test]
     fn error_missing_paren_if() {
-        expect_error("if true { }", ErrorKind::Parser);
+        expect_error("if true { }", ErrorKind::SyntaxError);
     }
 
     #[test]
     fn error_missing_paren_while() {
-        expect_error("while true { }", ErrorKind::Parser);
+        expect_error("while true { }", ErrorKind::SyntaxError);
     }
 
     #[test]
     fn error_missing_paren_for() {
-        expect_error("for var i = 0; i < 5; i = i + 1 { }", ErrorKind::Parser);
+        expect_error(
+            "for var i = 0; i < 5; i = i + 1 { }",
+            ErrorKind::SyntaxError,
+        );
     }
 
     #[test]
     fn error_missing_brace_function() {
-        expect_error("fun foo() return 1;", ErrorKind::Parser);
+        expect_error("fun foo() return 1;", ErrorKind::SyntaxError);
     }
 
     #[test]
     fn error_builtin_wrong_arity() {
-        expect_error("io.printn();", ErrorKind::Runtime);
+        expect_error("io.printn();", ErrorKind::TypeError);
     }
     #[test]
     fn edge_empty_program() {
@@ -1397,7 +1403,7 @@ mod tests {
 
     #[test]
     fn edge_bare_semicolons_error() {
-        expect_error(";;;", ErrorKind::Parser);
+        expect_error(";;;", ErrorKind::SyntaxError);
     }
 
     #[test]
@@ -1656,32 +1662,32 @@ mod tests {
     }
     #[test]
     fn parser_error_const_without_initializer() {
-        expect_error("const x;", ErrorKind::Parser);
+        expect_error("const x;", ErrorKind::SyntaxError);
     }
 
     #[test]
     fn parser_error_fun_missing_name() {
-        expect_error("fun () {}", ErrorKind::Parser);
+        expect_error("fun () {}", ErrorKind::SyntaxError);
     }
 
     #[test]
     fn parser_error_mod_missing_name() {
-        expect_error("mod {}", ErrorKind::Parser);
+        expect_error("mod {}", ErrorKind::SyntaxError);
     }
 
     #[test]
     fn parser_error_unmatched_paren() {
-        expect_error("var x = (1 + 2;", ErrorKind::Parser);
+        expect_error("var x = (1 + 2;", ErrorKind::SyntaxError);
     }
 
     #[test]
     fn parser_error_unmatched_bracket() {
-        expect_error("var x = [1, 2;", ErrorKind::Parser);
+        expect_error("var x = [1, 2;", ErrorKind::SyntaxError);
     }
 
     #[test]
     fn parser_error_empty_parens_in_expr() {
-        expect_error("var x = ();", ErrorKind::Parser);
+        expect_error("var x = ();", ErrorKind::SyntaxError);
     }
     #[test]
     fn integration_io_write_and_read() {
@@ -1698,7 +1704,7 @@ mod tests {
     fn integration_io_read_nonexistent_file() {
         expect_error(
             r#"var content = io.read("/tmp/nonexistent_cirq_file.txt");"#,
-            ErrorKind::Runtime,
+            ErrorKind::Error,
         );
     }
     #[test]
@@ -1900,7 +1906,7 @@ mod tests {
             }
             var p = Pair(1);
         "#,
-            ErrorKind::Runtime,
+            ErrorKind::TypeError,
         );
     }
 
@@ -1916,7 +1922,7 @@ mod tests {
             var b = Box(5);
             var x = b.missing;
         "#,
-            ErrorKind::Runtime,
+            ErrorKind::ReferenceError,
         );
     }
 
@@ -2098,7 +2104,7 @@ mod tests {
         expect_error(
             r#"var x = math.sin("hello");
 "#,
-            ErrorKind::Runtime,
+            ErrorKind::Error,
         );
     }
 
@@ -2107,7 +2113,7 @@ mod tests {
         expect_error(
             r#"var x = math.min(1, "two");
 "#,
-            ErrorKind::Runtime,
+            ErrorKind::Error,
         );
     }
     #[test]

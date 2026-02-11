@@ -182,7 +182,7 @@ impl<'src> Lexer<'src> {
             b'a'..=b'z' | b'A'..=b'Z' | b'_' => self.scan_identifier(start_pos)?,
 
             _ => {
-                return Err(CirqError::lexer(
+                return Err(CirqError::syntax(
                     format!("unexpected character: '{}'", byte as char),
                     Span::new(start_line, start_col, 1),
                 ));
@@ -204,7 +204,7 @@ impl<'src> Lexer<'src> {
 
         loop {
             if self.is_at_end() {
-                return Err(CirqError::lexer(
+                return Err(CirqError::syntax(
                     "unterminated string literal",
                     Span::new(start_line, start_col, 1),
                 ));
@@ -220,7 +220,7 @@ impl<'src> Lexer<'src> {
             if byte == b'\\' {
                 self.advance();
                 if self.is_at_end() {
-                    return Err(CirqError::lexer(
+                    return Err(CirqError::syntax(
                         "unterminated escape sequence",
                         Span::new(self.line, self.col, 1),
                     ));
@@ -293,7 +293,7 @@ impl<'src> Lexer<'src> {
             self.skip_whitespace_and_comments();
 
             if self.is_at_end() {
-                return Err(CirqError::lexer(
+                return Err(CirqError::syntax(
                     "unterminated string interpolation \\(...)",
                     Span::new(str_start_line, str_start_col, 1),
                 ));
@@ -374,7 +374,7 @@ impl<'src> Lexer<'src> {
         }
 
         let value: f64 = num_str.parse().map_err(|_| {
-            CirqError::lexer(
+            CirqError::syntax(
                 format!("invalid number literal: {}", num_str),
                 Span::new(start_line, start_col, num_str.len() as u32),
             )
@@ -410,14 +410,14 @@ impl<'src> Lexer<'src> {
         }
 
         if digits.is_empty() {
-            return Err(CirqError::lexer(
+            return Err(CirqError::syntax(
                 format!("expected {} digits after '{}'", name, prefix),
                 Span::new(start_line, start_col, prefix.len() as u32),
             ));
         }
 
         let value = u64::from_str_radix(&digits, radix).map_err(|_| {
-            CirqError::lexer(
+            CirqError::syntax(
                 format!("invalid {} literal: {}{}", name, prefix, digits),
                 Span::new(
                     start_line,
@@ -435,7 +435,7 @@ impl<'src> Lexer<'src> {
         }
 
         let text = std::str::from_utf8(&self.source[start_pos..self.pos]).map_err(|_| {
-            CirqError::lexer(
+            CirqError::syntax(
                 "invalid UTF-8 in identifier",
                 Span::new(self.line, self.col, (self.pos - start_pos) as u32),
             )

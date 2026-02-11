@@ -1,4 +1,4 @@
-use crate::error::{CirqError, CirqResult};
+use crate::error::{CirqError, CirqResult, Span, StackFrame};
 use crate::opcode::{CompiledFunction, Instruction};
 use crate::value::{Instance, Module, Value};
 
@@ -743,7 +743,7 @@ impl Vm {
                             Value::Str(Rc::new(format!("{}{}", x, y)))
                         }
                         _ => {
-                            return Err(self.runtime_error(format!(
+                            return Err(self.type_error(format!(
                                 "cannot add {} and {}",
                                 va.type_name(),
                                 vb.type_name()
@@ -774,9 +774,7 @@ impl Vm {
                             self.registers[base + dst as usize] = Value::Num(-n);
                         }
                         v => {
-                            return Err(
-                                self.runtime_error(format!("cannot negate {}", v.type_name()))
-                            );
+                            return Err(self.type_error(format!("cannot negate {}", v.type_name())));
                         }
                     }
                 }
@@ -805,7 +803,7 @@ impl Vm {
                         }
                         v => {
                             return Err(
-                                self.runtime_error(format!("cannot bitwise NOT {}", v.type_name()))
+                                self.type_error(format!("cannot bitwise NOT {}", v.type_name()))
                             );
                         }
                     }
@@ -850,7 +848,7 @@ impl Vm {
                         }
                         v => {
                             return Err(
-                                self.runtime_error(format!("cannot increment {}", v.type_name()))
+                                self.type_error(format!("cannot increment {}", v.type_name()))
                             );
                         }
                     }
@@ -863,7 +861,7 @@ impl Vm {
                         }
                         v => {
                             return Err(
-                                self.runtime_error(format!("cannot decrement {}", v.type_name()))
+                                self.type_error(format!("cannot decrement {}", v.type_name()))
                             );
                         }
                     }
@@ -897,7 +895,7 @@ impl Vm {
                         }
                         None => {
                             return Err(
-                                self.runtime_error(format!("undefined variable '{}'", name))
+                                self.reference_error(format!("undefined variable '{}'", name))
                             );
                         }
                     }
@@ -932,7 +930,7 @@ impl Vm {
                     match callee {
                         Value::Fun(func) => {
                             if arg_count != func.param_count {
-                                return Err(self.runtime_error(format!(
+                                return Err(self.type_error(format!(
                                     "function '{}' expects {} arguments, got {}",
                                     func.name, func.param_count, arg_count
                                 )));
@@ -957,7 +955,7 @@ impl Vm {
                             name, arity, func, ..
                         } => {
                             if arg_count != arity {
-                                return Err(self.runtime_error(format!(
+                                return Err(self.type_error(format!(
                                     "builtin '{}' expects {} arguments, got {}",
                                     name, arity, arg_count
                                 )));
@@ -971,7 +969,7 @@ impl Vm {
                             }
 
                             let result = func(&args).map_err(|e| {
-                                CirqError::runtime_no_span(format!("{}: {}", name, e))
+                                CirqError::error(format!("{}: {}", name, e), self.current_span())
                             })?;
                             self.registers[base + dst as usize] = result;
                         }
@@ -986,7 +984,7 @@ impl Vm {
                                 match init_method {
                                     Value::Fun(func) => {
                                         if arg_count != func.param_count {
-                                            return Err(self.runtime_error(format!(
+                                            return Err(self.type_error(format!(
                                                 "'{}' init expects {} arguments, got {}",
                                                 class.name, func.param_count, arg_count
                                             )));
@@ -1014,7 +1012,7 @@ impl Vm {
                                         name, arity, func, ..
                                     } => {
                                         if arg_count != *arity {
-                                            return Err(self.runtime_error(format!(
+                                            return Err(self.type_error(format!(
                                                 "'{}' init expects {} arguments, got {}",
                                                 name, arity, arg_count
                                             )));
@@ -1031,13 +1029,15 @@ impl Vm {
                                         }
 
                                         func(&args).map_err(|e| {
-                                            CirqError::runtime_no_span(format!("{}: {}", name, e))
+                                            CirqError::error(
+                                                format!("{}: {}", name, e),
+                                                self.current_span(),
+                                            )
                                         })?;
                                     }
                                     _ => {
-                                        return Err(self.runtime_error(
-                                            "class init is not callable".to_string(),
-                                        ));
+                                        return Err(self
+                                            .type_error("class init is not callable".to_string()));
                                     }
                                 }
                             }
@@ -1047,7 +1047,7 @@ impl Vm {
                         Value::BoundMethod { receiver, method } => match *method {
                             Value::Fun(ref func) => {
                                 if arg_count != func.param_count {
-                                    return Err(self.runtime_error(format!(
+                                    return Err(self.type_error(format!(
                                         "method '{}' expects {} arguments, got {}",
                                         func.name, func.param_count, arg_count
                                     )));
@@ -1074,7 +1074,7 @@ impl Vm {
                                 name, arity, func, ..
                             } => {
                                 if arg_count != arity {
-                                    return Err(self.runtime_error(format!(
+                                    return Err(self.type_error(format!(
                                         "builtin '{}' expects {} arguments, got {}",
                                         name, arity, arg_count
                                     )));
@@ -1090,18 +1090,21 @@ impl Vm {
                                 }
 
                                 let result = func(&args).map_err(|e| {
-                                    CirqError::runtime_no_span(format!("{}: {}", name, e))
+                                    CirqError::error(
+                                        format!("{}: {}", name, e),
+                                        self.current_span(),
+                                    )
                                 })?;
                                 self.registers[base + dst as usize] = result;
                             }
                             _ => {
-                                return Err(self.runtime_error(
+                                return Err(self.type_error(
                                     "bound method contains non-callable value".to_string(),
                                 ));
                             }
                         },
                         other => {
-                            return Err(self.runtime_error(format!(
+                            return Err(self.type_error(format!(
                                 "cannot call value of type '{}'",
                                 other.type_name()
                             )));
@@ -1161,7 +1164,7 @@ impl Vm {
                             let i = *n as usize;
                             let elems = arr.borrow();
                             if i >= elems.len() {
-                                return Err(self.runtime_error(format!(
+                                return Err(self.range_error(format!(
                                     "index {} out of bounds (length {})",
                                     i,
                                     elems.len()
@@ -1170,7 +1173,7 @@ impl Vm {
                             self.registers[base + dst as usize] = elems[i].clone();
                         }
                         _ => {
-                            return Err(self.runtime_error(format!(
+                            return Err(self.type_error(format!(
                                 "cannot index {} with {}",
                                 array.type_name(),
                                 index.type_name()
@@ -1189,7 +1192,7 @@ impl Vm {
                             let i = *n as usize;
                             let mut elems = arr.borrow_mut();
                             if i >= elems.len() {
-                                return Err(self.runtime_error(format!(
+                                return Err(self.range_error(format!(
                                     "index {} out of bounds (length {})",
                                     i,
                                     elems.len()
@@ -1198,7 +1201,7 @@ impl Vm {
                             elems[i] = value;
                         }
                         _ => {
-                            return Err(self.runtime_error(format!(
+                            return Err(self.type_error(format!(
                                 "cannot index {} with {}",
                                 array.type_name(),
                                 index.type_name()
@@ -1223,7 +1226,7 @@ impl Vm {
                                     method: Box::new(method.clone()),
                                 };
                             } else {
-                                return Err(self.runtime_error(format!(
+                                return Err(self.reference_error(format!(
                                     "'{}' instance has no field or method '{}'",
                                     inst_ref.class.name, name
                                 )));
@@ -1234,7 +1237,7 @@ impl Vm {
                                 self.registers[base + dst as usize] = val;
                             }
                             None => {
-                                return Err(self.runtime_error(format!(
+                                return Err(self.reference_error(format!(
                                     "module '{}' has no member '{}'",
                                     m.name, name
                                 )));
@@ -1249,13 +1252,13 @@ impl Vm {
                                         method: Box::new(method_val.clone()),
                                     };
                                 } else {
-                                    return Err(self.runtime_error(format!(
+                                    return Err(self.reference_error(format!(
                                         "type '{}' has no method '{}'",
                                         type_name, name
                                     )));
                                 }
                             } else {
-                                return Err(self.runtime_error(format!(
+                                return Err(self.type_error(format!(
                                     "cannot access member '{}' on {}",
                                     name,
                                     obj_val.type_name()
@@ -1277,7 +1280,7 @@ impl Vm {
                             inst.borrow_mut().fields.insert(name, value);
                         }
                         _ => {
-                            return Err(self.runtime_error(format!(
+                            return Err(self.type_error(format!(
                                 "cannot set field '{}' on {}",
                                 name,
                                 obj_val.type_name()
@@ -1321,7 +1324,7 @@ impl Vm {
                 self.registers[base + dst as usize] = Value::Num(op(*x, *y));
                 Ok(())
             }
-            _ => Err(self.runtime_error(format!(
+            _ => Err(self.type_error(format!(
                 "cannot {} {} and {}",
                 name,
                 va.type_name(),
@@ -1348,7 +1351,7 @@ impl Vm {
                 self.registers[base + dst as usize] = Value::Num(result as f64);
                 Ok(())
             }
-            _ => Err(self.runtime_error(format!(
+            _ => Err(self.type_error(format!(
                 "cannot {} {} and {}",
                 name,
                 va.type_name(),
@@ -1374,7 +1377,7 @@ impl Vm {
                 self.registers[base + dst as usize] = Value::Bool(op(*x, *y));
                 Ok(())
             }
-            _ => Err(self.runtime_error(format!(
+            _ => Err(self.type_error(format!(
                 "cannot compare ({}) {} and {}",
                 sym,
                 va.type_name(),
@@ -1383,7 +1386,40 @@ impl Vm {
         }
     }
 
-    fn runtime_error(&self, message: String) -> CirqError {
-        CirqError::runtime_no_span(message)
+    fn current_span(&self) -> Option<Span> {
+        let frame = self.frames.last()?;
+        let ip = frame.ip.checked_sub(1)?;
+        frame.function.spans.get(ip).copied()
+    }
+
+    fn collect_stack_trace(&self) -> Vec<StackFrame> {
+        self.frames
+            .iter()
+            .rev()
+            .map(|f| {
+                let span = if f.ip > 0 {
+                    f.function.spans.get(f.ip - 1).copied()
+                } else {
+                    None
+                };
+                StackFrame {
+                    function_name: f.function.name.clone(),
+                    span,
+                }
+            })
+            .collect()
+    }
+
+    fn type_error(&self, message: String) -> CirqError {
+        CirqError::type_error(message, self.current_span()).with_frames(self.collect_stack_trace())
+    }
+
+    fn reference_error(&self, message: String) -> CirqError {
+        CirqError::reference_error(message, self.current_span())
+            .with_frames(self.collect_stack_trace())
+    }
+
+    fn range_error(&self, message: String) -> CirqError {
+        CirqError::range_error(message, self.current_span()).with_frames(self.collect_stack_trace())
     }
 }

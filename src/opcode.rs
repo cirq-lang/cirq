@@ -1,3 +1,5 @@
+use crate::error::Span;
+
 #[derive(Debug, Clone, Copy)]
 pub enum Instruction {
     LoadConst {
@@ -207,6 +209,7 @@ pub enum Instruction {
 pub struct CompiledFunction {
     pub name: String,
     pub instructions: Vec<Instruction>,
+    pub spans: Vec<Span>,
     pub constants: Vec<crate::value::Value>,
     pub names: Vec<String>,
     pub local_count: u8,

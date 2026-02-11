@@ -403,8 +403,8 @@ impl Parser {
                 Ok(Expr::SelfRef { span: t.span })
             }
 
-            _ => Err(CirqError::parser(
-                format!("unexpected token: {:?}", token.kind),
+            _ => Err(CirqError::syntax(
+                format!("unexpected token {}", token.kind),
                 token.span,
             )),
         }
@@ -627,7 +627,7 @@ impl Parser {
                     break;
                 }
                 _ => {
-                    return Err(CirqError::parser(
+                    return Err(CirqError::syntax(
                         "unterminated string interpolation",
                         next.span,
                     ));
@@ -668,7 +668,7 @@ impl Parser {
                 self.advance();
                 Ok("self".to_string())
             }
-            _ => Err(CirqError::parser("expected parameter name", token.span)),
+            _ => Err(CirqError::syntax("expected parameter name", token.span)),
         }
     }
 
@@ -740,7 +740,7 @@ impl Parser {
         if self.check_kind(kind) {
             Ok(self.advance())
         } else {
-            Err(CirqError::parser(msg, self.peek().span))
+            Err(CirqError::syntax(msg, self.peek().span))
         }
     }
 
@@ -754,7 +754,7 @@ impl Parser {
                 unreachable!()
             }
         } else {
-            Err(CirqError::parser(msg, token.span))
+            Err(CirqError::syntax(msg, token.span))
         }
     }
 
