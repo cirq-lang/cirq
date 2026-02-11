@@ -1,7 +1,7 @@
 <div align="center">
-  <img src="docs/icon.svg" height="200" alt="Cirq Logo" />
-  <h1>Cirq</h1>
-  <p>A small, interpreted programming language built with Rust.</p>
+  <img src="docs/icon.png" height="200" alt="Cirq Logo" />
+  <h1><strong>Cirq</strong></h1>
+  <p>A smol, interpreted programming language built with Rust.</p>
 </div>
 
 ## Getting Started
