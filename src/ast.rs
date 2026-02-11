@@ -60,7 +60,18 @@ pub enum Stmt {
     },
     ClassDecl {
         name: String,
+        superclass: Option<String>,
         methods: Vec<MethodDecl>,
+        span: Span,
+    },
+    Throw {
+        value: Expr,
+        span: Span,
+    },
+    TryCatch {
+        body: Vec<Stmt>,
+        catch_name: Option<String>,
+        catch_body: Option<Vec<Stmt>>,
         span: Span,
     },
 }
@@ -150,6 +161,21 @@ pub enum Expr {
     SelfRef {
         span: Span,
     },
+    SuperAccess {
+        member: String,
+        span: Span,
+    },
+    TryExpr {
+        body: Box<Expr>,
+        catch_name: Option<String>,
+        catch_body: Option<Vec<Stmt>>,
+        span: Span,
+    },
+    NullCoalesce {
+        left: Box<Expr>,
+        right: Box<Expr>,
+        span: Span,
+    },
 }
 
 impl Expr {
@@ -171,7 +197,10 @@ impl Expr {
             | Expr::Array { span, .. }
             | Expr::PreIncDec { span, .. }
             | Expr::PostIncDec { span, .. }
-            | Expr::SelfRef { span } => *span,
+            | Expr::SelfRef { span }
+            | Expr::SuperAccess { span, .. }
+            | Expr::TryExpr { span, .. }
+            | Expr::NullCoalesce { span, .. } => *span,
         }
     }
 }
@@ -191,7 +220,9 @@ impl Stmt {
             | Stmt::For { span, .. }
             | Stmt::Break { span }
             | Stmt::Continue { span }
-            | Stmt::ClassDecl { span, .. } => *span,
+            | Stmt::ClassDecl { span, .. }
+            | Stmt::Throw { span, .. }
+            | Stmt::TryCatch { span, .. } => *span,
         }
     }
 }

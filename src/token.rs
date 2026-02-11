@@ -28,6 +28,10 @@ pub enum TokenKind {
     Continue,
     Class,
     SelfKw,
+    Super,
+    Throw,
+    Try,
+    Catch,
 
     Plus,
     Minus,
@@ -81,6 +85,8 @@ pub enum TokenKind {
 
     Comma,
     Semicolon,
+    Colon,
+    QuestionQuestion,
     Dot,
 
     Eof,
@@ -114,6 +120,10 @@ impl fmt::Display for TokenKind {
             TokenKind::Continue => write!(f, "'continue'"),
             TokenKind::Class => write!(f, "'class'"),
             TokenKind::SelfKw => write!(f, "'self'"),
+            TokenKind::Super => write!(f, "'super'"),
+            TokenKind::Throw => write!(f, "'throw'"),
+            TokenKind::Try => write!(f, "'try'"),
+            TokenKind::Catch => write!(f, "'catch'"),
 
             TokenKind::Plus => write!(f, "'+'"),
             TokenKind::Minus => write!(f, "'-'"),
@@ -167,6 +177,8 @@ impl fmt::Display for TokenKind {
 
             TokenKind::Comma => write!(f, "','"),
             TokenKind::Semicolon => write!(f, "';'"),
+            TokenKind::Colon => write!(f, "':'"),
+            TokenKind::QuestionQuestion => write!(f, "'??'"),
             TokenKind::Dot => write!(f, "'.'"),
 
             TokenKind::Eof => write!(f, "end of file"),
@@ -205,6 +217,10 @@ pub fn lookup_keyword(ident: &str) -> Option<TokenKind> {
         "continue" => Some(TokenKind::Continue),
         "class" => Some(TokenKind::Class),
         "self" => Some(TokenKind::SelfKw),
+        "super" => Some(TokenKind::Super),
+        "throw" => Some(TokenKind::Throw),
+        "try" => Some(TokenKind::Try),
+        "catch" => Some(TokenKind::Catch),
         _ => None,
     }
 }

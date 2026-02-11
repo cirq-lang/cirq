@@ -65,6 +65,7 @@ pub trait BuiltinModule {
             let class = Class {
                 name: class_def.name.to_string(),
                 methods,
+                parent: None,
             };
             members.push((class_def.name.to_string(), Value::Class(Rc::new(class))));
         }
@@ -411,6 +412,7 @@ fn build_datetime_instance(ts: f64) -> Value {
             }
             m
         },
+        parent: None,
     };
 
     let mut fields: FxHashMap<String, Value> = FxHashMap::default();

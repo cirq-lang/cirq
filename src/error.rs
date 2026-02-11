@@ -51,6 +51,7 @@ pub struct CirqError {
     pub message: String,
     pub span: Option<Span>,
     pub frames: Vec<StackFrame>,
+    pub thrown_value: Option<crate::value::Value>,
 }
 
 impl CirqError {
@@ -61,6 +62,7 @@ impl CirqError {
             message: message.into(),
             span: Some(span),
             frames: Vec::new(),
+            thrown_value: None,
         }
     }
 
@@ -71,6 +73,7 @@ impl CirqError {
             message: message.into(),
             span,
             frames: Vec::new(),
+            thrown_value: None,
         }
     }
 
@@ -81,6 +84,7 @@ impl CirqError {
             message: message.into(),
             span,
             frames: Vec::new(),
+            thrown_value: None,
         }
     }
 
@@ -91,6 +95,7 @@ impl CirqError {
             message: message.into(),
             span,
             frames: Vec::new(),
+            thrown_value: None,
         }
     }
 
@@ -101,6 +106,28 @@ impl CirqError {
             message: message.into(),
             span,
             frames: Vec::new(),
+            thrown_value: None,
+        }
+    }
+
+    pub fn thrown(value: crate::value::Value, span: Option<Span>) -> Self {
+        let message = match &value {
+            crate::value::Value::Str(s) => s.to_string(),
+            crate::value::Value::Instance(inst) => {
+                let inst = inst.borrow();
+                match inst.fields.get("message") {
+                    Some(crate::value::Value::Str(s)) => s.to_string(),
+                    _ => inst.class.name.clone(),
+                }
+            }
+            other => other.to_display_string(),
+        };
+        Self {
+            kind: ErrorKind::Error,
+            message,
+            span,
+            frames: Vec::new(),
+            thrown_value: Some(value),
         }
     }
 

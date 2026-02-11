@@ -170,9 +170,22 @@ impl Compiler {
             Stmt::Continue { span } => self.compile_continue(*span),
             Stmt::ClassDecl {
                 name,
+                superclass,
                 methods,
                 span,
-            } => self.compile_class_decl(name, methods, *span),
+            } => self.compile_class_decl(name, superclass.as_deref(), methods, *span),
+            Stmt::Throw { value, span } => self.compile_throw(value, *span),
+            Stmt::TryCatch {
+                body,
+                catch_name,
+                catch_body,
+                span,
+            } => self.compile_try_catch_stmt(
+                body,
+                catch_name.as_deref(),
+                catch_body.as_deref(),
+                *span,
+            ),
         }
     }
 
@@ -352,9 +365,19 @@ impl Compiler {
     fn compile_class_decl(
         &mut self,
         name: &str,
+        superclass: Option<&str>,
         methods: &[MethodDecl],
         _span: Span,
     ) -> CirqResult<()> {
+        let parent_reg = if let Some(sc) = superclass {
+            let r = self.alloc_reg();
+            let name_idx = self.add_name(sc);
+            self.emit(Instruction::GetGlobal { dst: r, name_idx });
+            Some(r)
+        } else {
+            None
+        };
+
         let mut compiled_methods = rustc_hash::FxHashMap::default();
 
         for method in methods {
@@ -406,6 +429,7 @@ impl Compiler {
         let class = crate::value::Class {
             name: name.to_string(),
             methods: compiled_methods,
+            parent: None,
         };
         let class_val = Value::Class(Rc::new(class));
         let const_idx = self.add_constant(class_val);
@@ -414,6 +438,14 @@ impl Compiler {
             dst,
             idx: const_idx,
         });
+
+        if let Some(pr) = parent_reg {
+            self.emit(Instruction::Inherit {
+                child: dst,
+                parent: pr,
+            });
+            self.free_reg(pr);
+        }
 
         if self.scope_depth == 0 {
             let name_idx = self.add_name(name);
@@ -623,6 +655,14 @@ impl Compiler {
                 self.compile_post_inc_dec(*op, operand, *span)
             }
             Expr::SelfRef { span } => self.compile_ident("self", *span),
+            Expr::SuperAccess { member, span, .. } => self.compile_super_access(member, *span),
+            Expr::TryExpr {
+                body,
+                catch_name,
+                catch_body,
+                span,
+            } => self.compile_try_expr(body, catch_name.as_deref(), catch_body.as_deref(), *span),
+            Expr::NullCoalesce { left, right, .. } => self.compile_null_coalesce(left, right),
         }
     }
 
@@ -1031,6 +1071,154 @@ impl Compiler {
         }
         Ok(())
     }
+
+    fn compile_throw(&mut self, value: &Expr, _span: Span) -> CirqResult<()> {
+        let src = self.compile_expr(value)?;
+        self.emit(Instruction::Throw { src });
+        self.free_reg_to(src);
+        Ok(())
+    }
+
+    fn compile_try_catch_stmt(
+        &mut self,
+        body: &[Stmt],
+        catch_name: Option<&str>,
+        catch_body: Option<&[Stmt]>,
+        _span: Span,
+    ) -> CirqResult<()> {
+        let result_reg = self.alloc_reg();
+        let setup_idx = self.instructions.len();
+        self.emit(Instruction::SetupTry {
+            catch_offset: 0,
+            dst: result_reg,
+        });
+
+        self.begin_scope();
+        for stmt in body {
+            self.compile_stmt(stmt)?;
+        }
+        self.end_scope();
+
+        self.emit(Instruction::PopTry);
+        let jump_over_catch = self.emit_placeholder();
+
+        let catch_ip = self.instructions.len();
+        let catch_offset = catch_ip as i32 - setup_idx as i32 - 1;
+        self.instructions[setup_idx] = Instruction::SetupTry {
+            catch_offset,
+            dst: result_reg,
+        };
+
+        if let Some(cb) = catch_body {
+            self.begin_scope();
+            if let Some(name) = catch_name {
+                let err_reg = self.alloc_reg();
+                self.emit(Instruction::Move {
+                    dst: err_reg,
+                    src: result_reg,
+                });
+                self.locals.push(Local {
+                    name: name.to_string(),
+                    slot: err_reg,
+                    depth: self.scope_depth,
+                    is_const: true,
+                });
+            }
+            for stmt in cb {
+                self.compile_stmt(stmt)?;
+            }
+            self.end_scope();
+        }
+
+        self.patch_jump(jump_over_catch);
+        self.free_reg(result_reg);
+        Ok(())
+    }
+
+    fn compile_super_access(&mut self, member: &str, _span: Span) -> CirqResult<u8> {
+        let self_reg = self.compile_ident("self", _span)?;
+        let name_idx = self.add_name(member);
+        let dst = self_reg;
+        self.emit(Instruction::GetSuper {
+            dst,
+            obj: self_reg,
+            name_idx,
+        });
+        Ok(dst)
+    }
+
+    fn compile_try_expr(
+        &mut self,
+        body: &Expr,
+        catch_name: Option<&str>,
+        catch_body: Option<&[Stmt]>,
+        _span: Span,
+    ) -> CirqResult<u8> {
+        let result_reg = self.alloc_reg();
+        let setup_idx = self.instructions.len();
+        self.emit(Instruction::SetupTry {
+            catch_offset: 0,
+            dst: result_reg,
+        });
+
+        let body_reg = self.compile_expr(body)?;
+        self.emit(Instruction::Move {
+            dst: result_reg,
+            src: body_reg,
+        });
+        self.free_reg_to(result_reg + 1);
+
+        self.emit(Instruction::PopTry);
+        let jump_over_catch = self.emit_placeholder();
+
+        let catch_ip = self.instructions.len();
+        let catch_offset = catch_ip as i32 - setup_idx as i32 - 1;
+        self.instructions[setup_idx] = Instruction::SetupTry {
+            catch_offset,
+            dst: result_reg,
+        };
+
+        if let Some(cb) = catch_body {
+            self.begin_scope();
+            if let Some(name) = catch_name {
+                let err_reg = self.alloc_reg();
+                self.emit(Instruction::Move {
+                    dst: err_reg,
+                    src: result_reg,
+                });
+                self.locals.push(Local {
+                    name: name.to_string(),
+                    slot: err_reg,
+                    depth: self.scope_depth,
+                    is_const: true,
+                });
+            }
+            for stmt in cb {
+                self.compile_stmt(stmt)?;
+            }
+            if let Some(last_stmt) = cb.last() {
+                if let Stmt::ExprStmt { expr, .. } = last_stmt {
+                    let _ = expr;
+                }
+            }
+            self.end_scope();
+        } else {
+            self.emit(Instruction::LoadNull { dst: result_reg });
+        }
+
+        self.patch_jump(jump_over_catch);
+        Ok(result_reg)
+    }
+
+    fn compile_null_coalesce(&mut self, left: &Expr, right: &Expr) -> CirqResult<u8> {
+        let a = self.compile_expr(left)?;
+        let b = self.compile_expr(right)?;
+        let dst = a;
+        self.emit(Instruction::NullCoalesce { dst, a, b });
+        self.free_reg(b);
+        Ok(dst)
+    }
+
     #[inline]
     fn alloc_reg(&mut self) -> u8 {
         let reg = self.next_reg;

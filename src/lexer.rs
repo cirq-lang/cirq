@@ -61,6 +61,18 @@ impl<'src> Lexer<'src> {
             b',' => TokenKind::Comma,
             b';' => TokenKind::Semicolon,
             b'~' => TokenKind::Tilde,
+            b':' => TokenKind::Colon,
+
+            b'?' => {
+                if self.match_byte(b'?') {
+                    TokenKind::QuestionQuestion
+                } else {
+                    return Err(CirqError::syntax(
+                        "unexpected character: '?'",
+                        Span::new(start_line, start_col, 1),
+                    ));
+                }
+            }
 
             b'.' => TokenKind::Dot,
 

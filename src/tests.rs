@@ -2125,4 +2125,256 @@ mod tests {
             panic!("expected num");
         }
     }
+
+    // --- Class Inheritance Tests ---
+    #[test]
+    fn inheritance_basic() {
+        let result = run(r#"
+            class Animal {
+                speak() { return "..."; }
+            }
+            class Dog : Animal {
+                bark() { return "woof"; }
+            }
+            var d = Dog();
+            var __result = d.bark();
+        "#)
+        .unwrap();
+        assert_eq!(result, Value::Str(Rc::new("woof".to_string())));
+    }
+
+    #[test]
+    fn inheritance_parent_method() {
+        let result = run(r#"
+            class Animal {
+                speak() { return "generic"; }
+            }
+            class Dog : Animal {}
+            var d = Dog();
+            var __result = d.speak();
+        "#)
+        .unwrap();
+        assert_eq!(result, Value::Str(Rc::new("generic".to_string())));
+    }
+
+    #[test]
+    fn inheritance_method_override() {
+        let result = run(r#"
+            class Animal {
+                speak() { return "generic"; }
+            }
+            class Cat : Animal {
+                speak() { return "meow"; }
+            }
+            var c = Cat();
+            var __result = c.speak();
+        "#)
+        .unwrap();
+        assert_eq!(result, Value::Str(Rc::new("meow".to_string())));
+    }
+
+    #[test]
+    fn inheritance_super_call() {
+        let result = run(r#"
+            class Base {
+                greet() { return "hello"; }
+            }
+            class Child : Base {
+                greet() { return super.greet() + " world"; }
+            }
+            var c = Child();
+            var __result = c.greet();
+        "#)
+        .unwrap();
+        assert_eq!(result, Value::Str(Rc::new("hello world".to_string())));
+    }
+
+    #[test]
+    fn inheritance_multi_level() {
+        let result = run(r#"
+            class A {
+                val() { return 1; }
+            }
+            class B : A {}
+            class C : B {}
+            var c = C();
+            var __result = c.val();
+        "#)
+        .unwrap();
+        assert_eq!(result, Value::Num(1.0));
+    }
+
+    #[test]
+    fn inheritance_child_has_own_and_parent_methods() {
+        let result = run(r#"
+            class Base {
+                foo() { return "base_foo"; }
+            }
+            class Child : Base {
+                bar() { return "child_bar"; }
+            }
+            var c = Child();
+            var __result = c.foo() + "_" + c.bar();
+        "#)
+        .unwrap();
+        assert_eq!(
+            result,
+            Value::Str(Rc::new("base_foo_child_bar".to_string()))
+        );
+    }
+
+    // --- Throw Tests ---
+    #[test]
+    fn throw_string_uncaught() {
+        expect_error(r#"throw "something went wrong";"#, ErrorKind::Error);
+    }
+
+    #[test]
+    fn throw_number_uncaught() {
+        expect_error("throw 42;", ErrorKind::Error);
+    }
+
+    // --- Try/Catch Statement Tests ---
+    #[test]
+    fn try_catch_statement_basic() {
+        let result = run(r#"
+            var __result = "before";
+            try {
+                throw "oops";
+                __result = "unreachable";
+            } catch (e) {
+                __result = e;
+            }
+        "#)
+        .unwrap();
+        assert_eq!(result, Value::Str(Rc::new("oops".to_string())));
+    }
+
+    #[test]
+    fn try_catch_no_throw() {
+        let result = run(r#"
+            var __result = "initial";
+            try {
+                __result = "from_try";
+            } catch (e) {
+                __result = "from_catch";
+            }
+        "#)
+        .unwrap();
+        assert_eq!(result, Value::Str(Rc::new("from_try".to_string())));
+    }
+
+    #[test]
+    fn try_catch_runtime_error() {
+        let result = run(r#"
+            var __result = "ok";
+            try {
+                var x = 1 + "hello";
+            } catch (e) {
+                __result = "caught";
+            }
+        "#)
+        .unwrap();
+        assert_eq!(result, Value::Str(Rc::new("caught".to_string())));
+    }
+
+    #[test]
+    fn try_catch_nested() {
+        let result = run(r#"
+            var __result = "none";
+            try {
+                try {
+                    throw "inner";
+                } catch (e) {
+                    __result = "inner_caught";
+                }
+            } catch (e) {
+                __result = "outer_caught";
+            }
+        "#)
+        .unwrap();
+        assert_eq!(result, Value::Str(Rc::new("inner_caught".to_string())));
+    }
+
+    #[test]
+    fn try_catch_nested_rethrow() {
+        let result = run(r#"
+            var __result = "none";
+            try {
+                try {
+                    throw "error";
+                } catch (e) {
+                    throw "rethrown";
+                }
+            } catch (e) {
+                __result = e;
+            }
+        "#)
+        .unwrap();
+        assert_eq!(result, Value::Str(Rc::new("rethrown".to_string())));
+    }
+
+    // --- Null Coalescing Tests ---
+    #[test]
+    fn null_coalesce_null_fallback() {
+        let result = run("var __result = null ?? 42;").unwrap();
+        assert_eq!(result, Value::Num(42.0));
+    }
+
+    #[test]
+    fn null_coalesce_non_null_passthrough() {
+        let result = run("var __result = 10 ?? 42;").unwrap();
+        assert_eq!(result, Value::Num(10.0));
+    }
+
+    #[test]
+    fn null_coalesce_false_is_not_null() {
+        let result = run("var __result = false ?? true;").unwrap();
+        assert_eq!(result, Value::Bool(false));
+    }
+
+    #[test]
+    fn null_coalesce_zero_is_not_null() {
+        let result = run("var __result = 0 ?? 99;").unwrap();
+        assert_eq!(result, Value::Num(0.0));
+    }
+
+    #[test]
+    fn null_coalesce_empty_string_is_not_null() {
+        let result = run(r#"var __result = "" ?? "fallback";"#).unwrap();
+        assert_eq!(result, Value::Str(Rc::new("".to_string())));
+    }
+
+    #[test]
+    fn null_coalesce_chain() {
+        let result = run("var __result = null ?? null ?? 7;").unwrap();
+        assert_eq!(result, Value::Num(7.0));
+    }
+
+    // --- Lexer Tests for New Tokens ---
+    #[test]
+    fn lexer_colon_token() {
+        let kinds = tokenize(":").unwrap();
+        assert_eq!(kinds, vec![TokenKind::Colon]);
+    }
+
+    #[test]
+    fn lexer_question_question_token() {
+        let kinds = tokenize("??").unwrap();
+        assert_eq!(kinds, vec![TokenKind::QuestionQuestion]);
+    }
+
+    #[test]
+    fn lexer_new_keywords() {
+        let kinds = tokenize("super throw try catch").unwrap();
+        assert_eq!(
+            kinds,
+            vec![
+                TokenKind::Super,
+                TokenKind::Throw,
+                TokenKind::Try,
+                TokenKind::Catch,
+            ]
+        );
+    }
 }

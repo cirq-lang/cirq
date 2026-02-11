@@ -23,6 +23,19 @@ impl Module {
 pub struct Class {
     pub name: String,
     pub methods: FxHashMap<String, Value>,
+    pub parent: Option<Rc<Class>>,
+}
+
+impl Class {
+    pub fn find_method(&self, name: &str) -> Option<Value> {
+        if let Some(m) = self.methods.get(name) {
+            return Some(m.clone());
+        }
+        if let Some(ref parent) = self.parent {
+            return parent.find_method(name);
+        }
+        None
+    }
 }
 #[derive(Debug, Clone)]
 pub struct Instance {

@@ -5,20 +5,21 @@ use crate::token::{Token, TokenKind};
 #[repr(u8)]
 enum Precedence {
     None = 0,
-    Assignment = 1, // = += -= etc.
-    Or = 2,         // ||
-    And = 3,        // &&
-    BitOr = 4,      // |
-    BitXor = 5,     // ^
-    BitAnd = 6,     // &
-    Equality = 7,   // == !=
-    Comparison = 8, // < > <= >=
-    Shift = 9,      // << >>
-    Term = 10,      // + -
-    Factor = 11,    // * / %
-    Power = 12,     // **
-    Unary = 13,     // ! - + ~ ++ --
-    Call = 14,      // . () []
+    Assignment = 1,
+    NullCoalesce = 2,
+    Or = 3,
+    And = 4,
+    BitOr = 5,
+    BitXor = 6,
+    BitAnd = 7,
+    Equality = 8,
+    Comparison = 9,
+    Shift = 10,
+    Term = 11,
+    Factor = 12,
+    Power = 13,
+    Unary = 14,
+    Call = 15,
 }
 pub struct Parser {
     tokens: Vec<Token>,
@@ -103,8 +104,15 @@ impl Parser {
     }
 
     fn class_declaration(&mut self) -> CirqResult<Stmt> {
-        let span = self.advance().span; // consume 'class'
+        let span = self.advance().span;
         let name = self.expect_ident("expected class name")?;
+
+        let superclass = if self.match_kind(&TokenKind::Colon) {
+            Some(self.expect_ident("expected superclass name")?)
+        } else {
+            None
+        };
+
         self.expect_kind(&TokenKind::LBrace, "expected '{' after class name")?;
 
         let mut methods = Vec::new();
@@ -129,6 +137,7 @@ impl Parser {
         self.expect_kind(&TokenKind::RBrace, "expected '}' after class body")?;
         Ok(Stmt::ClassDecl {
             name,
+            superclass,
             methods,
             span,
         })
@@ -142,6 +151,8 @@ impl Parser {
             TokenKind::Return => self.return_statement(),
             TokenKind::Break => self.break_statement(),
             TokenKind::Continue => self.continue_statement(),
+            TokenKind::Throw => self.throw_statement(),
+            TokenKind::Try => self.try_statement(),
             _ => self.expression_statement(),
         }
     }
@@ -247,6 +258,83 @@ impl Parser {
         let span = self.advance().span;
         self.expect_semicolon()?;
         Ok(Stmt::Continue { span })
+    }
+
+    fn throw_statement(&mut self) -> CirqResult<Stmt> {
+        let span = self.advance().span;
+        let value = self.expression()?;
+        self.expect_semicolon()?;
+        Ok(Stmt::Throw { value, span })
+    }
+
+    fn try_statement(&mut self) -> CirqResult<Stmt> {
+        let span = self.advance().span;
+
+        if self.check_kind(&TokenKind::LBrace) {
+            let body = self.parse_block_body()?;
+            let (catch_name, catch_body) = if self.match_kind(&TokenKind::Catch) {
+                self.expect_kind(&TokenKind::LParen, "expected '(' after 'catch'")?;
+                let name = self.expect_ident("expected error variable name")?;
+                self.expect_kind(&TokenKind::RParen, "expected ')' after catch variable")?;
+                let cb = self.parse_block_body()?;
+                (Some(name), Some(cb))
+            } else {
+                (None, None)
+            };
+            Ok(Stmt::TryCatch {
+                body,
+                catch_name,
+                catch_body,
+                span,
+            })
+        } else {
+            let expr = self.parse_precedence(Precedence::Assignment)?;
+            let (catch_name, catch_body) = if self.match_kind(&TokenKind::Catch) {
+                self.expect_kind(&TokenKind::LParen, "expected '(' after 'catch'")?;
+                let name = self.expect_ident("expected error variable name")?;
+                self.expect_kind(&TokenKind::RParen, "expected ')' after catch variable")?;
+                let cb = self.parse_block_body()?;
+                (Some(name), Some(cb))
+            } else {
+                (None, None)
+            };
+            let try_expr = Expr::TryExpr {
+                body: Box::new(expr),
+                catch_name,
+                catch_body,
+                span,
+            };
+            if self.check_kind(&TokenKind::Semicolon) {
+                self.advance();
+                Ok(Stmt::ExprStmt {
+                    expr: try_expr,
+                    span,
+                })
+            } else {
+                let full = self.finish_infix(try_expr)?;
+                let s = full.span();
+                self.expect_semicolon()?;
+                Ok(Stmt::ExprStmt {
+                    expr: full,
+                    span: s,
+                })
+            }
+        }
+    }
+
+    fn finish_infix(&mut self, left: Expr) -> CirqResult<Expr> {
+        let mut result = left;
+        loop {
+            if self.is_at_end() {
+                break;
+            }
+            let prec = self.get_infix_precedence();
+            if prec < Precedence::NullCoalesce {
+                break;
+            }
+            result = self.parse_infix(result, prec)?;
+        }
+        Ok(result)
     }
 
     fn expression_statement(&mut self) -> CirqResult<Stmt> {
@@ -403,6 +491,36 @@ impl Parser {
                 Ok(Expr::SelfRef { span: t.span })
             }
 
+            TokenKind::Super => {
+                let t = self.advance();
+                self.expect_kind(&TokenKind::Dot, "expected '.' after 'super'")?;
+                let member = self.expect_ident("expected method name after 'super.'")?;
+                Ok(Expr::SuperAccess {
+                    member,
+                    span: t.span,
+                })
+            }
+
+            TokenKind::Try => {
+                let t = self.advance();
+                let body = self.parse_precedence(Precedence::NullCoalesce)?;
+                let (catch_name, catch_body) = if self.match_kind(&TokenKind::Catch) {
+                    self.expect_kind(&TokenKind::LParen, "expected '(' after 'catch'")?;
+                    let name = self.expect_ident("expected error variable name")?;
+                    self.expect_kind(&TokenKind::RParen, "expected ')' after catch variable")?;
+                    let cb = self.parse_block_body()?;
+                    (Some(name), Some(cb))
+                } else {
+                    (None, None)
+                };
+                Ok(Expr::TryExpr {
+                    body: Box::new(body),
+                    catch_name,
+                    catch_body,
+                    span: t.span,
+                })
+            }
+
             _ => Err(CirqError::syntax(
                 format!("unexpected token {}", token.kind),
                 token.span,
@@ -533,6 +651,17 @@ impl Parser {
                 })
             }
 
+            TokenKind::QuestionQuestion => {
+                self.advance();
+                let right = self.parse_precedence(Precedence::Or)?;
+                let span = left.span();
+                Ok(Expr::NullCoalesce {
+                    left: Box::new(left),
+                    right: Box::new(right),
+                    span,
+                })
+            }
+
             _ => Ok(left),
         }
     }
@@ -564,6 +693,7 @@ impl Parser {
             TokenKind::Plus | TokenKind::Minus => Precedence::Term,
             TokenKind::Star | TokenKind::Slash | TokenKind::Percent => Precedence::Factor,
             TokenKind::Power => Precedence::Power,
+            TokenKind::QuestionQuestion => Precedence::NullCoalesce,
             TokenKind::PlusPlus | TokenKind::MinusMinus => Precedence::Call,
             TokenKind::LParen | TokenKind::LBracket | TokenKind::Dot => Precedence::Call,
             _ => Precedence::None,
@@ -808,18 +938,19 @@ impl Precedence {
         match v {
             0 => Precedence::None,
             1 => Precedence::Assignment,
-            2 => Precedence::Or,
-            3 => Precedence::And,
-            4 => Precedence::BitOr,
-            5 => Precedence::BitXor,
-            6 => Precedence::BitAnd,
-            7 => Precedence::Equality,
-            8 => Precedence::Comparison,
-            9 => Precedence::Shift,
-            10 => Precedence::Term,
-            11 => Precedence::Factor,
-            12 => Precedence::Power,
-            13 => Precedence::Unary,
+            2 => Precedence::NullCoalesce,
+            3 => Precedence::Or,
+            4 => Precedence::And,
+            5 => Precedence::BitOr,
+            6 => Precedence::BitXor,
+            7 => Precedence::BitAnd,
+            8 => Precedence::Equality,
+            9 => Precedence::Comparison,
+            10 => Precedence::Shift,
+            11 => Precedence::Term,
+            12 => Precedence::Factor,
+            13 => Precedence::Power,
+            14 => Precedence::Unary,
             _ => Precedence::Call,
         }
     }
@@ -843,7 +974,10 @@ impl Expr {
             | Expr::Array { span, .. }
             | Expr::PreIncDec { span, .. }
             | Expr::PostIncDec { span, .. }
-            | Expr::SelfRef { span } => *span,
+            | Expr::SelfRef { span }
+            | Expr::SuperAccess { span, .. }
+            | Expr::TryExpr { span, .. }
+            | Expr::NullCoalesce { span, .. } => *span,
         }
     }
 }

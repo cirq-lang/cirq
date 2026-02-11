@@ -11,11 +11,25 @@ struct CallFrame {
     ip: usize,
     base: usize,
 }
+
+#[derive(Debug, Clone)]
+struct TryHandler {
+    catch_ip: usize,
+    frame_depth: usize,
+    reg_count: usize,
+    dst: u8,
+}
+enum StepResult {
+    Continue,
+    Return(Value),
+}
+
 pub struct Vm {
     globals: FxHashMap<String, Value>,
     registers: Vec<Value>,
     frames: Vec<CallFrame>,
     type_methods: FxHashMap<&'static str, FxHashMap<&'static str, Value>>,
+    try_handlers: Vec<TryHandler>,
 }
 
 impl Vm {
@@ -25,6 +39,7 @@ impl Vm {
             registers: Vec::with_capacity(256),
             frames: Vec::with_capacity(64),
             type_methods: FxHashMap::default(),
+            try_handlers: Vec::new(),
         };
         vm.register_builtin_methods();
         vm
@@ -709,229 +724,360 @@ impl Vm {
             let instr = frame.function.instructions[frame.ip];
             frame.ip += 1;
 
-            match instr {
-                Instruction::LoadConst { dst, idx } => {
-                    let base = self.frames.last().unwrap().base;
-                    let val = self.frames.last().unwrap().function.constants[idx as usize].clone();
-                    self.registers[base + dst as usize] = val;
-                }
-                Instruction::LoadNull { dst } => {
-                    let base = self.frames.last().unwrap().base;
-                    self.registers[base + dst as usize] = Value::Null;
-                }
-                Instruction::LoadTrue { dst } => {
-                    let base = self.frames.last().unwrap().base;
-                    self.registers[base + dst as usize] = Value::Bool(true);
-                }
-                Instruction::LoadFalse { dst } => {
-                    let base = self.frames.last().unwrap().base;
-                    self.registers[base + dst as usize] = Value::Bool(false);
-                }
-                Instruction::Move { dst, src } => {
-                    let base = self.frames.last().unwrap().base;
-                    let val = self.registers[base + src as usize].clone();
-                    self.registers[base + dst as usize] = val;
-                }
-
-                Instruction::Add { dst, a, b } => {
-                    let base = self.frames.last().unwrap().base;
-                    let va = &self.registers[base + a as usize];
-                    let vb = &self.registers[base + b as usize];
-                    let result = match (va, vb) {
-                        (Value::Num(x), Value::Num(y)) => Value::Num(x + y),
-                        (Value::Str(x), Value::Str(y)) => {
-                            Value::Str(Rc::new(format!("{}{}", x, y)))
+            match self.run_step(instr) {
+                Ok(StepResult::Continue) => {}
+                Ok(StepResult::Return(val)) => return Ok(val),
+                Err(err) => {
+                    if let Some(handler) = self.try_handlers.last().cloned() {
+                        self.try_handlers.pop();
+                        while self.frames.len() > handler.frame_depth {
+                            self.frames.pop();
                         }
-                        _ => {
-                            return Err(self.type_error(format!(
-                                "cannot add {} and {}",
-                                va.type_name(),
-                                vb.type_name()
-                            )));
-                        }
-                    };
-                    self.registers[base + dst as usize] = result;
-                }
-                Instruction::Sub { dst, a, b } => {
-                    self.num_binary_op(dst, a, b, |x, y| x - y, "subtract")?;
-                }
-                Instruction::Mul { dst, a, b } => {
-                    self.num_binary_op(dst, a, b, |x, y| x * y, "multiply")?;
-                }
-                Instruction::Div { dst, a, b } => {
-                    self.num_binary_op(dst, a, b, |x, y| x / y, "divide")?;
-                }
-                Instruction::Mod { dst, a, b } => {
-                    self.num_binary_op(dst, a, b, |x, y| x % y, "modulo")?;
-                }
-                Instruction::Pow { dst, a, b } => {
-                    self.num_binary_op(dst, a, b, |x, y| x.powf(y), "exponentiate")?;
-                }
-                Instruction::Neg { dst, src } => {
-                    let base = self.frames.last().unwrap().base;
-                    match &self.registers[base + src as usize] {
-                        Value::Num(n) => {
-                            self.registers[base + dst as usize] = Value::Num(-n);
-                        }
-                        v => {
-                            return Err(self.type_error(format!("cannot negate {}", v.type_name())));
-                        }
+                        self.registers.truncate(handler.reg_count);
+                        let frame = self.frames.last_mut().unwrap();
+                        frame.ip = handler.catch_ip;
+                        let catch_base = frame.base;
+                        let caught_value = err
+                            .thrown_value
+                            .unwrap_or_else(|| Value::Str(Rc::new(err.message.clone())));
+                        self.registers[catch_base + handler.dst as usize] = caught_value;
+                    } else {
+                        return Err(err);
                     }
                 }
+            }
+        }
+    }
 
-                Instruction::BitAnd { dst, a, b } => {
-                    self.int_binary_op(dst, a, b, |x, y| x & y, "bitwise AND")?;
-                }
-                Instruction::BitOr { dst, a, b } => {
-                    self.int_binary_op(dst, a, b, |x, y| x | y, "bitwise OR")?;
-                }
-                Instruction::BitXor { dst, a, b } => {
-                    self.int_binary_op(dst, a, b, |x, y| x ^ y, "bitwise XOR")?;
-                }
-                Instruction::Shl { dst, a, b } => {
-                    self.int_binary_op(dst, a, b, |x, y| x << y, "left shift")?;
-                }
-                Instruction::Shr { dst, a, b } => {
-                    self.int_binary_op(dst, a, b, |x, y| x >> y, "right shift")?;
-                }
-                Instruction::BitNot { dst, src } => {
-                    let base = self.frames.last().unwrap().base;
-                    match &self.registers[base + src as usize] {
-                        Value::Num(n) => {
-                            let i = *n as i64;
-                            self.registers[base + dst as usize] = Value::Num(!i as f64);
-                        }
-                        v => {
-                            return Err(
-                                self.type_error(format!("cannot bitwise NOT {}", v.type_name()))
-                            );
-                        }
+    fn run_step(&mut self, instr: Instruction) -> CirqResult<StepResult> {
+        match instr {
+            Instruction::LoadConst { dst, idx } => {
+                let base = self.frames.last().unwrap().base;
+                let val = self.frames.last().unwrap().function.constants[idx as usize].clone();
+                self.registers[base + dst as usize] = val;
+            }
+            Instruction::LoadNull { dst } => {
+                let base = self.frames.last().unwrap().base;
+                self.registers[base + dst as usize] = Value::Null;
+            }
+            Instruction::LoadTrue { dst } => {
+                let base = self.frames.last().unwrap().base;
+                self.registers[base + dst as usize] = Value::Bool(true);
+            }
+            Instruction::LoadFalse { dst } => {
+                let base = self.frames.last().unwrap().base;
+                self.registers[base + dst as usize] = Value::Bool(false);
+            }
+            Instruction::Move { dst, src } => {
+                let base = self.frames.last().unwrap().base;
+                let val = self.registers[base + src as usize].clone();
+                self.registers[base + dst as usize] = val;
+            }
+
+            Instruction::Add { dst, a, b } => {
+                let base = self.frames.last().unwrap().base;
+                let va = &self.registers[base + a as usize];
+                let vb = &self.registers[base + b as usize];
+                let result = match (va, vb) {
+                    (Value::Num(x), Value::Num(y)) => Value::Num(x + y),
+                    (Value::Str(x), Value::Str(y)) => Value::Str(Rc::new(format!("{}{}", x, y))),
+                    _ => {
+                        return Err(self.type_error(format!(
+                            "cannot add {} and {}",
+                            va.type_name(),
+                            vb.type_name()
+                        )));
+                    }
+                };
+                self.registers[base + dst as usize] = result;
+            }
+            Instruction::Sub { dst, a, b } => {
+                self.num_binary_op(dst, a, b, |x, y| x - y, "subtract")?;
+            }
+            Instruction::Mul { dst, a, b } => {
+                self.num_binary_op(dst, a, b, |x, y| x * y, "multiply")?;
+            }
+            Instruction::Div { dst, a, b } => {
+                self.num_binary_op(dst, a, b, |x, y| x / y, "divide")?;
+            }
+            Instruction::Mod { dst, a, b } => {
+                self.num_binary_op(dst, a, b, |x, y| x % y, "modulo")?;
+            }
+            Instruction::Pow { dst, a, b } => {
+                self.num_binary_op(dst, a, b, |x, y| x.powf(y), "exponentiate")?;
+            }
+            Instruction::Neg { dst, src } => {
+                let base = self.frames.last().unwrap().base;
+                match &self.registers[base + src as usize] {
+                    Value::Num(n) => {
+                        self.registers[base + dst as usize] = Value::Num(-n);
+                    }
+                    v => {
+                        return Err(self.type_error(format!("cannot negate {}", v.type_name())));
                     }
                 }
+            }
 
-                Instruction::Eq { dst, a, b } => {
-                    let base = self.frames.last().unwrap().base;
-                    let result =
-                        self.registers[base + a as usize] == self.registers[base + b as usize];
-                    self.registers[base + dst as usize] = Value::Bool(result);
-                }
-                Instruction::Ne { dst, a, b } => {
-                    let base = self.frames.last().unwrap().base;
-                    let result =
-                        self.registers[base + a as usize] != self.registers[base + b as usize];
-                    self.registers[base + dst as usize] = Value::Bool(result);
-                }
-                Instruction::Lt { dst, a, b } => {
-                    self.num_cmp_op(dst, a, b, |x, y| x < y, "<")?;
-                }
-                Instruction::Gt { dst, a, b } => {
-                    self.num_cmp_op(dst, a, b, |x, y| x > y, ">")?;
-                }
-                Instruction::Le { dst, a, b } => {
-                    self.num_cmp_op(dst, a, b, |x, y| x <= y, "<=")?;
-                }
-                Instruction::Ge { dst, a, b } => {
-                    self.num_cmp_op(dst, a, b, |x, y| x >= y, ">=")?;
-                }
-
-                Instruction::Not { dst, src } => {
-                    let base = self.frames.last().unwrap().base;
-                    let truthy = self.registers[base + src as usize].is_truthy();
-                    self.registers[base + dst as usize] = Value::Bool(!truthy);
-                }
-
-                Instruction::Inc { dst } => {
-                    let base = self.frames.last().unwrap().base;
-                    match &self.registers[base + dst as usize] {
-                        Value::Num(n) => {
-                            self.registers[base + dst as usize] = Value::Num(n + 1.0);
-                        }
-                        v => {
-                            return Err(
-                                self.type_error(format!("cannot increment {}", v.type_name()))
-                            );
-                        }
+            Instruction::BitAnd { dst, a, b } => {
+                self.int_binary_op(dst, a, b, |x, y| x & y, "bitwise AND")?;
+            }
+            Instruction::BitOr { dst, a, b } => {
+                self.int_binary_op(dst, a, b, |x, y| x | y, "bitwise OR")?;
+            }
+            Instruction::BitXor { dst, a, b } => {
+                self.int_binary_op(dst, a, b, |x, y| x ^ y, "bitwise XOR")?;
+            }
+            Instruction::Shl { dst, a, b } => {
+                self.int_binary_op(dst, a, b, |x, y| x << y, "left shift")?;
+            }
+            Instruction::Shr { dst, a, b } => {
+                self.int_binary_op(dst, a, b, |x, y| x >> y, "right shift")?;
+            }
+            Instruction::BitNot { dst, src } => {
+                let base = self.frames.last().unwrap().base;
+                match &self.registers[base + src as usize] {
+                    Value::Num(n) => {
+                        let i = *n as i64;
+                        self.registers[base + dst as usize] = Value::Num(!i as f64);
+                    }
+                    v => {
+                        return Err(
+                            self.type_error(format!("cannot bitwise NOT {}", v.type_name()))
+                        );
                     }
                 }
-                Instruction::Dec { dst } => {
-                    let base = self.frames.last().unwrap().base;
-                    match &self.registers[base + dst as usize] {
-                        Value::Num(n) => {
-                            self.registers[base + dst as usize] = Value::Num(n - 1.0);
-                        }
-                        v => {
-                            return Err(
-                                self.type_error(format!("cannot decrement {}", v.type_name()))
-                            );
-                        }
+            }
+
+            Instruction::Eq { dst, a, b } => {
+                let base = self.frames.last().unwrap().base;
+                let result = self.registers[base + a as usize] == self.registers[base + b as usize];
+                self.registers[base + dst as usize] = Value::Bool(result);
+            }
+            Instruction::Ne { dst, a, b } => {
+                let base = self.frames.last().unwrap().base;
+                let result = self.registers[base + a as usize] != self.registers[base + b as usize];
+                self.registers[base + dst as usize] = Value::Bool(result);
+            }
+            Instruction::Lt { dst, a, b } => {
+                self.num_cmp_op(dst, a, b, |x, y| x < y, "<")?;
+            }
+            Instruction::Gt { dst, a, b } => {
+                self.num_cmp_op(dst, a, b, |x, y| x > y, ">")?;
+            }
+            Instruction::Le { dst, a, b } => {
+                self.num_cmp_op(dst, a, b, |x, y| x <= y, "<=")?;
+            }
+            Instruction::Ge { dst, a, b } => {
+                self.num_cmp_op(dst, a, b, |x, y| x >= y, ">=")?;
+            }
+
+            Instruction::Not { dst, src } => {
+                let base = self.frames.last().unwrap().base;
+                let truthy = self.registers[base + src as usize].is_truthy();
+                self.registers[base + dst as usize] = Value::Bool(!truthy);
+            }
+
+            Instruction::Inc { dst } => {
+                let base = self.frames.last().unwrap().base;
+                match &self.registers[base + dst as usize] {
+                    Value::Num(n) => {
+                        self.registers[base + dst as usize] = Value::Num(n + 1.0);
+                    }
+                    v => {
+                        return Err(self.type_error(format!("cannot increment {}", v.type_name())));
                     }
                 }
+            }
+            Instruction::Dec { dst } => {
+                let base = self.frames.last().unwrap().base;
+                match &self.registers[base + dst as usize] {
+                    Value::Num(n) => {
+                        self.registers[base + dst as usize] = Value::Num(n - 1.0);
+                    }
+                    v => {
+                        return Err(self.type_error(format!("cannot decrement {}", v.type_name())));
+                    }
+                }
+            }
 
-                Instruction::Jump { offset } => {
+            Instruction::Jump { offset } => {
+                let frame = self.frames.last_mut().unwrap();
+                frame.ip = (frame.ip as i32 + offset) as usize;
+            }
+            Instruction::JumpIfFalse { src, offset } => {
+                let base = self.frames.last().unwrap().base;
+                if !self.registers[base + src as usize].is_truthy() {
                     let frame = self.frames.last_mut().unwrap();
                     frame.ip = (frame.ip as i32 + offset) as usize;
                 }
-                Instruction::JumpIfFalse { src, offset } => {
-                    let base = self.frames.last().unwrap().base;
-                    if !self.registers[base + src as usize].is_truthy() {
-                        let frame = self.frames.last_mut().unwrap();
-                        frame.ip = (frame.ip as i32 + offset) as usize;
-                    }
+            }
+            Instruction::JumpIfTrue { src, offset } => {
+                let base = self.frames.last().unwrap().base;
+                if self.registers[base + src as usize].is_truthy() {
+                    let frame = self.frames.last_mut().unwrap();
+                    frame.ip = (frame.ip as i32 + offset) as usize;
                 }
-                Instruction::JumpIfTrue { src, offset } => {
-                    let base = self.frames.last().unwrap().base;
-                    if self.registers[base + src as usize].is_truthy() {
-                        let frame = self.frames.last_mut().unwrap();
-                        frame.ip = (frame.ip as i32 + offset) as usize;
-                    }
-                }
+            }
 
-                Instruction::GetGlobal { dst, name_idx } => {
-                    let base = self.frames.last().unwrap().base;
-                    let name = &self.frames.last().unwrap().function.names[name_idx as usize];
-                    match self.globals.get(name) {
-                        Some(val) => {
-                            self.registers[base + dst as usize] = val.clone();
+            Instruction::GetGlobal { dst, name_idx } => {
+                let base = self.frames.last().unwrap().base;
+                let name = &self.frames.last().unwrap().function.names[name_idx as usize];
+                match self.globals.get(name) {
+                    Some(val) => {
+                        self.registers[base + dst as usize] = val.clone();
+                    }
+                    None => {
+                        return Err(self.reference_error(format!("undefined variable '{}'", name)));
+                    }
+                }
+            }
+            Instruction::SetGlobal { name_idx, src } => {
+                let base = self.frames.last().unwrap().base;
+                let name = self.frames.last().unwrap().function.names[name_idx as usize].clone();
+                let val = self.registers[base + src as usize].clone();
+                self.globals.insert(name, val);
+            }
+            Instruction::GetLocal { dst, slot } => {
+                let base = self.frames.last().unwrap().base;
+                let val = self.registers[base + slot as usize].clone();
+                self.registers[base + dst as usize] = val;
+            }
+            Instruction::SetLocal { slot, src } => {
+                let base = self.frames.last().unwrap().base;
+                let val = self.registers[base + src as usize].clone();
+                self.registers[base + slot as usize] = val;
+            }
+
+            Instruction::Call {
+                dst,
+                func_reg,
+                arg_start,
+                arg_count,
+            } => {
+                let base = self.frames.last().unwrap().base;
+                let callee = self.registers[base + func_reg as usize].clone();
+
+                match callee {
+                    Value::Fun(func) => {
+                        if arg_count != func.param_count {
+                            return Err(self.type_error(format!(
+                                "function '{}' expects {} arguments, got {}",
+                                func.name, func.param_count, arg_count
+                            )));
                         }
-                        None => {
-                            return Err(
-                                self.reference_error(format!("undefined variable '{}'", name))
+
+                        let new_base = self.registers.len();
+                        let frame_size = func.local_count as usize + 16;
+                        self.registers.resize(new_base + frame_size, Value::Null);
+
+                        for i in 0..arg_count {
+                            self.registers[new_base + i as usize] =
+                                self.registers[base + arg_start as usize + i as usize].clone();
+                        }
+
+                        self.frames.push(CallFrame {
+                            function: func,
+                            ip: 0,
+                            base: new_base,
+                        });
+                    }
+                    Value::NativeFun {
+                        name, arity, func, ..
+                    } => {
+                        if arg_count != arity {
+                            return Err(self.type_error(format!(
+                                "builtin '{}' expects {} arguments, got {}",
+                                name, arity, arg_count
+                            )));
+                        }
+
+                        let mut args = Vec::with_capacity(arg_count as usize);
+                        for i in 0..arg_count {
+                            args.push(
+                                self.registers[base + arg_start as usize + i as usize].clone(),
                             );
                         }
+
+                        let result = func(&args).map_err(|e| {
+                            CirqError::error(format!("{}: {}", name, e), self.current_span())
+                        })?;
+                        self.registers[base + dst as usize] = result;
                     }
-                }
-                Instruction::SetGlobal { name_idx, src } => {
-                    let base = self.frames.last().unwrap().base;
-                    let name =
-                        self.frames.last().unwrap().function.names[name_idx as usize].clone();
-                    let val = self.registers[base + src as usize].clone();
-                    self.globals.insert(name, val);
-                }
-                Instruction::GetLocal { dst, slot } => {
-                    let base = self.frames.last().unwrap().base;
-                    let val = self.registers[base + slot as usize].clone();
-                    self.registers[base + dst as usize] = val;
-                }
-                Instruction::SetLocal { slot, src } => {
-                    let base = self.frames.last().unwrap().base;
-                    let val = self.registers[base + src as usize].clone();
-                    self.registers[base + slot as usize] = val;
-                }
+                    Value::Class(class) => {
+                        let instance = Rc::new(RefCell::new(Instance {
+                            class: class.clone(),
+                            fields: FxHashMap::default(),
+                        }));
+                        let instance_val = Value::Instance(instance.clone());
 
-                Instruction::Call {
-                    dst,
-                    func_reg,
-                    arg_start,
-                    arg_count,
-                } => {
-                    let base = self.frames.last().unwrap().base;
-                    let callee = self.registers[base + func_reg as usize].clone();
+                        if let Some(init_method) = class.methods.get("init") {
+                            match init_method {
+                                Value::Fun(func) => {
+                                    if arg_count != func.param_count {
+                                        return Err(self.type_error(format!(
+                                            "'{}' init expects {} arguments, got {}",
+                                            class.name, func.param_count, arg_count
+                                        )));
+                                    }
 
-                    match callee {
-                        Value::Fun(func) => {
+                                    let new_base = self.registers.len();
+                                    let frame_size = func.local_count as usize + 16;
+                                    self.registers.resize(new_base + frame_size, Value::Null);
+
+                                    self.registers[new_base] = instance_val.clone();
+                                    for i in 0..arg_count {
+                                        self.registers[new_base + 1 + i as usize] = self.registers
+                                            [base + arg_start as usize + i as usize]
+                                            .clone();
+                                    }
+
+                                    self.frames.push(CallFrame {
+                                        function: func.clone(),
+                                        ip: 0,
+                                        base: new_base,
+                                    });
+                                }
+                                Value::NativeFun {
+                                    name, arity, func, ..
+                                } => {
+                                    if arg_count != *arity {
+                                        return Err(self.type_error(format!(
+                                            "'{}' init expects {} arguments, got {}",
+                                            name, arity, arg_count
+                                        )));
+                                    }
+
+                                    let mut args = Vec::with_capacity(1 + arg_count as usize);
+                                    args.push(instance_val.clone());
+                                    for i in 0..arg_count {
+                                        args.push(
+                                            self.registers[base + arg_start as usize + i as usize]
+                                                .clone(),
+                                        );
+                                    }
+
+                                    func(&args).map_err(|e| {
+                                        CirqError::error(
+                                            format!("{}: {}", name, e),
+                                            self.current_span(),
+                                        )
+                                    })?;
+                                }
+                                _ => {
+                                    return Err(
+                                        self.type_error("class init is not callable".to_string())
+                                    );
+                                }
+                            }
+                        }
+
+                        self.registers[base + dst as usize] = instance_val;
+                    }
+                    Value::BoundMethod { receiver, method } => match *method {
+                        Value::Fun(ref func) => {
                             if arg_count != func.param_count {
                                 return Err(self.type_error(format!(
-                                    "function '{}' expects {} arguments, got {}",
+                                    "method '{}' expects {} arguments, got {}",
                                     func.name, func.param_count, arg_count
                                 )));
                             }
@@ -940,13 +1086,14 @@ impl Vm {
                             let frame_size = func.local_count as usize + 16;
                             self.registers.resize(new_base + frame_size, Value::Null);
 
+                            self.registers[new_base] = *receiver;
                             for i in 0..arg_count {
-                                self.registers[new_base + i as usize] =
+                                self.registers[new_base + 1 + i as usize] =
                                     self.registers[base + arg_start as usize + i as usize].clone();
                             }
 
                             self.frames.push(CallFrame {
-                                function: func,
+                                function: func.clone(),
                                 ip: 0,
                                 base: new_base,
                             });
@@ -961,7 +1108,8 @@ impl Vm {
                                 )));
                             }
 
-                            let mut args = Vec::with_capacity(arg_count as usize);
+                            let mut args = Vec::with_capacity(1 + arg_count as usize);
+                            args.push(*receiver);
                             for i in 0..arg_count {
                                 args.push(
                                     self.registers[base + arg_start as usize + i as usize].clone(),
@@ -973,339 +1121,301 @@ impl Vm {
                             })?;
                             self.registers[base + dst as usize] = result;
                         }
-                        Value::Class(class) => {
-                            let instance = Rc::new(RefCell::new(Instance {
-                                class: class.clone(),
-                                fields: FxHashMap::default(),
-                            }));
-                            let instance_val = Value::Instance(instance.clone());
-
-                            if let Some(init_method) = class.methods.get("init") {
-                                match init_method {
-                                    Value::Fun(func) => {
-                                        if arg_count != func.param_count {
-                                            return Err(self.type_error(format!(
-                                                "'{}' init expects {} arguments, got {}",
-                                                class.name, func.param_count, arg_count
-                                            )));
-                                        }
-
-                                        let new_base = self.registers.len();
-                                        let frame_size = func.local_count as usize + 16;
-                                        self.registers.resize(new_base + frame_size, Value::Null);
-
-                                        self.registers[new_base] = instance_val.clone();
-                                        for i in 0..arg_count {
-                                            self.registers[new_base + 1 + i as usize] = self
-                                                .registers
-                                                [base + arg_start as usize + i as usize]
-                                                .clone();
-                                        }
-
-                                        self.frames.push(CallFrame {
-                                            function: func.clone(),
-                                            ip: 0,
-                                            base: new_base,
-                                        });
-                                    }
-                                    Value::NativeFun {
-                                        name, arity, func, ..
-                                    } => {
-                                        if arg_count != *arity {
-                                            return Err(self.type_error(format!(
-                                                "'{}' init expects {} arguments, got {}",
-                                                name, arity, arg_count
-                                            )));
-                                        }
-
-                                        let mut args = Vec::with_capacity(1 + arg_count as usize);
-                                        args.push(instance_val.clone());
-                                        for i in 0..arg_count {
-                                            args.push(
-                                                self.registers
-                                                    [base + arg_start as usize + i as usize]
-                                                    .clone(),
-                                            );
-                                        }
-
-                                        func(&args).map_err(|e| {
-                                            CirqError::error(
-                                                format!("{}: {}", name, e),
-                                                self.current_span(),
-                                            )
-                                        })?;
-                                    }
-                                    _ => {
-                                        return Err(self
-                                            .type_error("class init is not callable".to_string()));
-                                    }
-                                }
-                            }
-
-                            self.registers[base + dst as usize] = instance_val;
-                        }
-                        Value::BoundMethod { receiver, method } => match *method {
-                            Value::Fun(ref func) => {
-                                if arg_count != func.param_count {
-                                    return Err(self.type_error(format!(
-                                        "method '{}' expects {} arguments, got {}",
-                                        func.name, func.param_count, arg_count
-                                    )));
-                                }
-
-                                let new_base = self.registers.len();
-                                let frame_size = func.local_count as usize + 16;
-                                self.registers.resize(new_base + frame_size, Value::Null);
-
-                                self.registers[new_base] = *receiver;
-                                for i in 0..arg_count {
-                                    self.registers[new_base + 1 + i as usize] = self.registers
-                                        [base + arg_start as usize + i as usize]
-                                        .clone();
-                                }
-
-                                self.frames.push(CallFrame {
-                                    function: func.clone(),
-                                    ip: 0,
-                                    base: new_base,
-                                });
-                            }
-                            Value::NativeFun {
-                                name, arity, func, ..
-                            } => {
-                                if arg_count != arity {
-                                    return Err(self.type_error(format!(
-                                        "builtin '{}' expects {} arguments, got {}",
-                                        name, arity, arg_count
-                                    )));
-                                }
-
-                                let mut args = Vec::with_capacity(1 + arg_count as usize);
-                                args.push(*receiver);
-                                for i in 0..arg_count {
-                                    args.push(
-                                        self.registers[base + arg_start as usize + i as usize]
-                                            .clone(),
-                                    );
-                                }
-
-                                let result = func(&args).map_err(|e| {
-                                    CirqError::error(
-                                        format!("{}: {}", name, e),
-                                        self.current_span(),
-                                    )
-                                })?;
-                                self.registers[base + dst as usize] = result;
-                            }
-                            _ => {
-                                return Err(self.type_error(
-                                    "bound method contains non-callable value".to_string(),
-                                ));
-                            }
-                        },
-                        other => {
-                            return Err(self.type_error(format!(
-                                "cannot call value of type '{}'",
-                                other.type_name()
-                            )));
-                        }
-                    }
-                }
-
-                Instruction::Return { src } => {
-                    let base = self.frames.last().unwrap().base;
-                    let return_val = self.registers[base + src as usize].clone();
-
-                    self.frames.pop();
-
-                    if self.frames.is_empty() {
-                        return Ok(return_val);
-                    }
-
-                    self.registers.truncate(base);
-
-                    let caller_frame = self.frames.last().unwrap();
-                    let call_instr = caller_frame.function.instructions[caller_frame.ip - 1];
-                    if let Instruction::Call { dst, .. } = call_instr {
-                        let caller_base = caller_frame.base;
-                        self.registers[caller_base + dst as usize] = return_val;
-                    }
-                }
-
-                Instruction::ReturnNull => {
-                    self.frames.pop();
-                    if self.frames.is_empty() {
-                        return Ok(Value::Null);
-                    }
-                    let base = self.frames.last().unwrap().base;
-                    let caller_frame = self.frames.last().unwrap();
-                    let call_instr = caller_frame.function.instructions[caller_frame.ip - 1];
-                    if let Instruction::Call { dst, .. } = call_instr {
-                        self.registers[base + dst as usize] = Value::Null;
-                    }
-                }
-
-                Instruction::NewArray { dst, start, count } => {
-                    let base = self.frames.last().unwrap().base;
-                    let mut elements = Vec::with_capacity(count as usize);
-                    for i in 0..count {
-                        elements.push(self.registers[base + start as usize + i as usize].clone());
-                    }
-                    self.registers[base + dst as usize] =
-                        Value::Array(Rc::new(RefCell::new(elements)));
-                }
-                Instruction::GetIndex { dst, obj, idx } => {
-                    let base = self.frames.last().unwrap().base;
-                    let array = self.registers[base + obj as usize].clone();
-                    let index = self.registers[base + idx as usize].clone();
-
-                    match (&array, &index) {
-                        (Value::Array(arr), Value::Num(n)) => {
-                            let i = *n as usize;
-                            let elems = arr.borrow();
-                            if i >= elems.len() {
-                                return Err(self.range_error(format!(
-                                    "index {} out of bounds (length {})",
-                                    i,
-                                    elems.len()
-                                )));
-                            }
-                            self.registers[base + dst as usize] = elems[i].clone();
-                        }
                         _ => {
-                            return Err(self.type_error(format!(
-                                "cannot index {} with {}",
-                                array.type_name(),
-                                index.type_name()
+                            return Err(self.type_error(
+                                "bound method contains non-callable value".to_string(),
+                            ));
+                        }
+                    },
+                    other => {
+                        return Err(self.type_error(format!(
+                            "cannot call value of type '{}'",
+                            other.type_name()
+                        )));
+                    }
+                }
+            }
+
+            Instruction::Return { src } => {
+                let base = self.frames.last().unwrap().base;
+                let return_val = self.registers[base + src as usize].clone();
+
+                self.frames.pop();
+
+                if self.frames.is_empty() {
+                    return Ok(StepResult::Return(return_val));
+                }
+
+                self.registers.truncate(base);
+
+                let caller_frame = self.frames.last().unwrap();
+                let call_instr = caller_frame.function.instructions[caller_frame.ip - 1];
+                if let Instruction::Call { dst, .. } = call_instr {
+                    let caller_base = caller_frame.base;
+                    self.registers[caller_base + dst as usize] = return_val;
+                }
+            }
+
+            Instruction::ReturnNull => {
+                self.frames.pop();
+                if self.frames.is_empty() {
+                    return Ok(StepResult::Return(Value::Null));
+                }
+                let base = self.frames.last().unwrap().base;
+                let caller_frame = self.frames.last().unwrap();
+                let call_instr = caller_frame.function.instructions[caller_frame.ip - 1];
+                if let Instruction::Call { dst, .. } = call_instr {
+                    self.registers[base + dst as usize] = Value::Null;
+                }
+            }
+
+            Instruction::NewArray { dst, start, count } => {
+                let base = self.frames.last().unwrap().base;
+                let mut elements = Vec::with_capacity(count as usize);
+                for i in 0..count {
+                    elements.push(self.registers[base + start as usize + i as usize].clone());
+                }
+                self.registers[base + dst as usize] = Value::Array(Rc::new(RefCell::new(elements)));
+            }
+            Instruction::GetIndex { dst, obj, idx } => {
+                let base = self.frames.last().unwrap().base;
+                let array = self.registers[base + obj as usize].clone();
+                let index = self.registers[base + idx as usize].clone();
+
+                match (&array, &index) {
+                    (Value::Array(arr), Value::Num(n)) => {
+                        let i = *n as usize;
+                        let elems = arr.borrow();
+                        if i >= elems.len() {
+                            return Err(self.range_error(format!(
+                                "index {} out of bounds (length {})",
+                                i,
+                                elems.len()
+                            )));
+                        }
+                        self.registers[base + dst as usize] = elems[i].clone();
+                    }
+                    _ => {
+                        return Err(self.type_error(format!(
+                            "cannot index {} with {}",
+                            array.type_name(),
+                            index.type_name()
+                        )));
+                    }
+                }
+            }
+            Instruction::SetIndex { obj, idx, val } => {
+                let base = self.frames.last().unwrap().base;
+                let array = self.registers[base + obj as usize].clone();
+                let index = self.registers[base + idx as usize].clone();
+                let value = self.registers[base + val as usize].clone();
+
+                match (&array, &index) {
+                    (Value::Array(arr), Value::Num(n)) => {
+                        let i = *n as usize;
+                        let mut elems = arr.borrow_mut();
+                        if i >= elems.len() {
+                            return Err(self.range_error(format!(
+                                "index {} out of bounds (length {})",
+                                i,
+                                elems.len()
+                            )));
+                        }
+                        elems[i] = value;
+                    }
+                    _ => {
+                        return Err(self.type_error(format!(
+                            "cannot index {} with {}",
+                            array.type_name(),
+                            index.type_name()
+                        )));
+                    }
+                }
+            }
+
+            Instruction::GetMember { dst, obj, name_idx } => {
+                let base = self.frames.last().unwrap().base;
+                let obj_val = self.registers[base + obj as usize].clone();
+                let name = &self.frames.last().unwrap().function.names[name_idx as usize];
+
+                match &obj_val {
+                    Value::Instance(inst) => {
+                        let inst_ref = inst.borrow();
+                        if let Some(val) = inst_ref.fields.get(name) {
+                            self.registers[base + dst as usize] = val.clone();
+                        } else if let Some(method) = inst_ref.class.find_method(name) {
+                            self.registers[base + dst as usize] = Value::BoundMethod {
+                                receiver: Box::new(obj_val.clone()),
+                                method: Box::new(method),
+                            };
+                        } else {
+                            return Err(self.reference_error(format!(
+                                "'{}' instance has no field or method '{}'",
+                                inst_ref.class.name, name
                             )));
                         }
                     }
-                }
-                Instruction::SetIndex { obj, idx, val } => {
-                    let base = self.frames.last().unwrap().base;
-                    let array = self.registers[base + obj as usize].clone();
-                    let index = self.registers[base + idx as usize].clone();
-                    let value = self.registers[base + val as usize].clone();
-
-                    match (&array, &index) {
-                        (Value::Array(arr), Value::Num(n)) => {
-                            let i = *n as usize;
-                            let mut elems = arr.borrow_mut();
-                            if i >= elems.len() {
-                                return Err(self.range_error(format!(
-                                    "index {} out of bounds (length {})",
-                                    i,
-                                    elems.len()
-                                )));
-                            }
-                            elems[i] = value;
+                    Value::Module(m) => match m.get_member(name) {
+                        Some(val) => {
+                            self.registers[base + dst as usize] = val;
                         }
-                        _ => {
-                            return Err(self.type_error(format!(
-                                "cannot index {} with {}",
-                                array.type_name(),
-                                index.type_name()
+                        None => {
+                            return Err(self.reference_error(format!(
+                                "module '{}' has no member '{}'",
+                                m.name, name
                             )));
                         }
-                    }
-                }
-
-                Instruction::GetMember { dst, obj, name_idx } => {
-                    let base = self.frames.last().unwrap().base;
-                    let obj_val = self.registers[base + obj as usize].clone();
-                    let name = &self.frames.last().unwrap().function.names[name_idx as usize];
-
-                    match &obj_val {
-                        Value::Instance(inst) => {
-                            let inst_ref = inst.borrow();
-                            if let Some(val) = inst_ref.fields.get(name) {
-                                self.registers[base + dst as usize] = val.clone();
-                            } else if let Some(method) = inst_ref.class.methods.get(name) {
+                    },
+                    other => {
+                        let type_name = other.type_name();
+                        if let Some(methods) = self.type_methods.get(type_name) {
+                            if let Some(method_val) = methods.get(name.as_str()) {
                                 self.registers[base + dst as usize] = Value::BoundMethod {
                                     receiver: Box::new(obj_val.clone()),
-                                    method: Box::new(method.clone()),
+                                    method: Box::new(method_val.clone()),
                                 };
                             } else {
                                 return Err(self.reference_error(format!(
-                                    "'{}' instance has no field or method '{}'",
-                                    inst_ref.class.name, name
+                                    "type '{}' has no method '{}'",
+                                    type_name, name
                                 )));
                             }
-                        }
-                        Value::Module(m) => match m.get_member(name) {
-                            Some(val) => {
-                                self.registers[base + dst as usize] = val;
-                            }
-                            None => {
-                                return Err(self.reference_error(format!(
-                                    "module '{}' has no member '{}'",
-                                    m.name, name
-                                )));
-                            }
-                        },
-                        other => {
-                            let type_name = other.type_name();
-                            if let Some(methods) = self.type_methods.get(type_name) {
-                                if let Some(method_val) = methods.get(name.as_str()) {
-                                    self.registers[base + dst as usize] = Value::BoundMethod {
-                                        receiver: Box::new(obj_val.clone()),
-                                        method: Box::new(method_val.clone()),
-                                    };
-                                } else {
-                                    return Err(self.reference_error(format!(
-                                        "type '{}' has no method '{}'",
-                                        type_name, name
-                                    )));
-                                }
-                            } else {
-                                return Err(self.type_error(format!(
-                                    "cannot access member '{}' on {}",
-                                    name,
-                                    obj_val.type_name()
-                                )));
-                            }
-                        }
-                    }
-                }
-
-                Instruction::SetMember { obj, name_idx, val } => {
-                    let base = self.frames.last().unwrap().base;
-                    let obj_val = self.registers[base + obj as usize].clone();
-                    let name =
-                        self.frames.last().unwrap().function.names[name_idx as usize].clone();
-                    let value = self.registers[base + val as usize].clone();
-
-                    match &obj_val {
-                        Value::Instance(inst) => {
-                            inst.borrow_mut().fields.insert(name, value);
-                        }
-                        _ => {
+                        } else {
                             return Err(self.type_error(format!(
-                                "cannot set field '{}' on {}",
+                                "cannot access member '{}' on {}",
                                 name,
                                 obj_val.type_name()
                             )));
                         }
                     }
                 }
+            }
 
-                Instruction::Concat { dst, start, count } => {
-                    let base = self.frames.last().unwrap().base;
-                    let mut result = String::new();
-                    for i in 0..count {
-                        let val = &self.registers[base + start as usize + i as usize];
-                        result.push_str(&val.to_display_string());
+            Instruction::SetMember { obj, name_idx, val } => {
+                let base = self.frames.last().unwrap().base;
+                let obj_val = self.registers[base + obj as usize].clone();
+                let name = self.frames.last().unwrap().function.names[name_idx as usize].clone();
+                let value = self.registers[base + val as usize].clone();
+
+                match &obj_val {
+                    Value::Instance(inst) => {
+                        inst.borrow_mut().fields.insert(name, value);
                     }
-                    self.registers[base + dst as usize] = Value::Str(Rc::new(result));
+                    _ => {
+                        return Err(self.type_error(format!(
+                            "cannot set field '{}' on {}",
+                            name,
+                            obj_val.type_name()
+                        )));
+                    }
                 }
-                Instruction::ToString { dst, src } => {
-                    let base = self.frames.last().unwrap().base;
-                    let val = &self.registers[base + src as usize];
-                    let s = val.to_display_string();
-                    self.registers[base + dst as usize] = Value::Str(Rc::new(s));
+            }
+
+            Instruction::Concat { dst, start, count } => {
+                let base = self.frames.last().unwrap().base;
+                let mut result = String::new();
+                for i in 0..count {
+                    let val = &self.registers[base + start as usize + i as usize];
+                    result.push_str(&val.to_display_string());
+                }
+                self.registers[base + dst as usize] = Value::Str(Rc::new(result));
+            }
+            Instruction::ToString { dst, src } => {
+                let base = self.frames.last().unwrap().base;
+                let val = &self.registers[base + src as usize];
+                let s = val.to_display_string();
+                self.registers[base + dst as usize] = Value::Str(Rc::new(s));
+            }
+
+            Instruction::Inherit { child, parent } => {
+                let base = self.frames.last().unwrap().base;
+                let parent_val = self.registers[base + parent as usize].clone();
+                let child_val = self.registers[base + child as usize].clone();
+
+                match (&child_val, &parent_val) {
+                    (Value::Class(child_class), Value::Class(parent_class)) => {
+                        let mut new_methods = parent_class.methods.clone();
+                        for (k, v) in &child_class.methods {
+                            new_methods.insert(k.clone(), v.clone());
+                        }
+                        let new_class = crate::value::Class {
+                            name: child_class.name.clone(),
+                            methods: new_methods,
+                            parent: Some(parent_class.clone()),
+                        };
+                        self.registers[base + child as usize] = Value::Class(Rc::new(new_class));
+                    }
+                    _ => {
+                        return Err(self.type_error("superclass must be a class".to_string()));
+                    }
+                }
+            }
+
+            Instruction::GetSuper { dst, obj, name_idx } => {
+                let base = self.frames.last().unwrap().base;
+                let obj_val = self.registers[base + obj as usize].clone();
+                let name = &self.frames.last().unwrap().function.names[name_idx as usize];
+
+                match &obj_val {
+                    Value::Instance(inst) => {
+                        let inst_ref = inst.borrow();
+                        if let Some(ref parent) = inst_ref.class.parent {
+                            if let Some(method) = parent.find_method(name) {
+                                self.registers[base + dst as usize] = Value::BoundMethod {
+                                    receiver: Box::new(obj_val.clone()),
+                                    method: Box::new(method),
+                                };
+                            } else {
+                                return Err(self.reference_error(format!(
+                                    "super class has no method '{}'",
+                                    name
+                                )));
+                            }
+                        } else {
+                            return Err(self.reference_error("no superclass found".to_string()));
+                        }
+                    }
+                    _ => {
+                        return Err(self.type_error("'super' used outside of instance".to_string()));
+                    }
+                }
+            }
+
+            Instruction::Throw { src } => {
+                let base = self.frames.last().unwrap().base;
+                let thrown = self.registers[base + src as usize].clone();
+                let span = self.current_span();
+                return Err(CirqError::thrown(thrown, span));
+            }
+
+            Instruction::SetupTry { catch_offset, dst } => {
+                let frame = self.frames.last().unwrap();
+                let catch_ip = (frame.ip as i32 + catch_offset) as usize;
+                self.try_handlers.push(TryHandler {
+                    catch_ip,
+                    frame_depth: self.frames.len(),
+                    reg_count: self.registers.len(),
+                    dst,
+                });
+            }
+
+            Instruction::PopTry => {
+                self.try_handlers.pop();
+            }
+
+            Instruction::NullCoalesce { dst, a, b } => {
+                let base = self.frames.last().unwrap().base;
+                let val = &self.registers[base + a as usize];
+                if matches!(val, Value::Null) {
+                    let fallback = self.registers[base + b as usize].clone();
+                    self.registers[base + dst as usize] = fallback;
+                } else {
+                    let v = val.clone();
+                    self.registers[base + dst as usize] = v;
                 }
             }
         }
+        Ok(StepResult::Continue)
     }
     #[inline]
     fn num_binary_op(

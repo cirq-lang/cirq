@@ -204,6 +204,30 @@ pub enum Instruction {
         dst: u8,
         src: u8,
     },
+
+    Inherit {
+        child: u8,
+        parent: u8,
+    },
+    GetSuper {
+        dst: u8,
+        obj: u8,
+        name_idx: u16,
+    },
+
+    Throw {
+        src: u8,
+    },
+    SetupTry {
+        catch_offset: i32,
+        dst: u8,
+    },
+    PopTry,
+    NullCoalesce {
+        dst: u8,
+        a: u8,
+        b: u8,
+    },
 }
 #[derive(Debug, Clone)]
 pub struct CompiledFunction {
