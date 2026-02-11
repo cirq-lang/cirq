@@ -72,6 +72,40 @@ impl Compiler {
             param_count: 0,
         })
     }
+
+    pub fn compile_repl(mut self, stmts: &[Stmt]) -> CirqResult<CompiledFunction> {
+        if stmts.is_empty() {
+            let r = self.alloc_reg();
+            self.emit(Instruction::LoadNull { dst: r });
+            self.emit(Instruction::Return { src: r });
+        } else {
+            for stmt in &stmts[..stmts.len() - 1] {
+                self.compile_stmt(stmt)?;
+            }
+
+            let last = &stmts[stmts.len() - 1];
+
+            if let Stmt::ExprStmt { expr, .. } = last {
+                let r = self.compile_expr(expr)?;
+                self.emit(Instruction::Return { src: r });
+            } else {
+                self.compile_stmt(last)?;
+                let r = self.alloc_reg();
+                self.emit(Instruction::LoadNull { dst: r });
+                self.emit(Instruction::Return { src: r });
+            }
+        }
+
+        Ok(CompiledFunction {
+            name: "<repl>".to_string(),
+            instructions: self.instructions,
+            spans: self.spans,
+            constants: self.constants,
+            names: self.names,
+            local_count: self.max_reg,
+            param_count: 0,
+        })
+    }
     fn compile_stmt(&mut self, stmt: &Stmt) -> CirqResult<()> {
         self.current_span = stmt.get_span();
         match stmt {

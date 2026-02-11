@@ -13,6 +13,7 @@ chrono = "0.4"
 bumpalo = { version = "3", features = ["collections"] }
 thin-vec = "0.2"
 clap = { version = "4.5.57", features = ["derive"] }
+rustyline = "17"
 
 [profile.release]
 opt-level = 3
